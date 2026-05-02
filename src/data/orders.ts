@@ -1,0 +1,30 @@
+export const orders = [
+  {
+    id: '1',
+    clientName: 'Иван Иванов',
+    clientPhone: '+380501234567',
+    device: 'Ноутбук ASUS',
+    problem: 'Не включается',
+    status: 'Принято',
+    totalAmount: 2000,
+    paidAmount: 500,
+    remainingAmount: 1500,
+    paymentStatus: 'Частично оплачено',
+    createdAt: '2026-04-24',
+    updatedAt: '2026-04-24',
+  },
+  {
+    id: '2',
+    clientName: 'Петр Петров',
+    clientPhone: '+380671234567',
+    device: 'Принтер HP',
+    problem: 'Не печатает',
+    status: 'В ремонте',
+    totalAmount: 1200,
+    paidAmount: 1200,
+    remainingAmount: 0,
+    paymentStatus: 'Полностью оплачено',
+    createdAt: '2026-04-23',
+    updatedAt: '2026-04-24',
+  }
+];

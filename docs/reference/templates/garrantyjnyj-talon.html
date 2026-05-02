@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="uk">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Гарантійний талон</title>
+    <link rel="stylesheet" href="./service-documents.css" />
+  </head>
+  <body>
+    <section class="sheet">
+      <div class="company-block" style="margin-left: 18mm; margin-top: 4mm;">
+        <div class="company-name">{{companyName}}</div>
+        <div>{{companyAddress}}</div>
+        <div>{{companyContacts}}</div>
+      </div>
+
+      <div class="title" style="margin-top: 20mm;">ГАРАНТІЙНИЙ ТАЛОН</div>
+      <div class="subtitle">Дата продажу «{{saleDay}}» {{saleMonth}} {{saleYear}} р.</div>
+
+      <div class="spacer-lg"></div>
+
+      <table class="doc-table" style="width: 165mm; margin-left: auto; margin-right: auto;">
+        <thead>
+          <tr>
+            <th style="width: 52mm; text-align: left;">Серійний номер</th>
+            <th style="text-align: left;">Найменування обладнання</th>
+            <th style="width: 42mm; text-align: left;">Термін гарантії (міс.)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>{{serialNumber}}</td>
+            <td>{{device}}</td>
+            <td>{{warrantyTerm}}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="spacer-lg"></div>
+
+      <div class="details-grid" style="width: 165mm; margin: 0 auto;">
+        <div><strong>Клієнт:</strong> {{clientName}}</div>
+        <div><strong>Телефон:</strong> {{phone}}</div>
+        <div><strong>Замовлення:</strong> {{orderNumber}}</div>
+        <div><strong>Дата:</strong> {{date}}</div>
+      </div>
+
+      <div class="spacer-xl"></div>
+
+      <div class="center">Підпис ____________________________</div>
+
+      <div class="spacer-xl"></div>
+
+      <div class="justify" style="width: 165mm; margin: 0 auto;">
+        <p>
+          Цим документом сервісний центр гарантує, що в разі виходу з ладу обладнання протягом терміну гарантії,
+          воно буде безоплатно відремонтовано або, в разі неможливості ремонту, замінене на справне.
+        </p>
+        <p>
+          Гарантійний ремонт здійснюється за наявності гарантійного талону з пред'явленням дати продажу,
+          терміну гарантії, найменування і серійного номера обладнання.
+        </p>
+        <p>Живлення пристроїв здійснюється від мережі змінного струму 220В / 50Гц.</p>
+        <p>Виріб знімається з гарантійного обслуговування у випадках:</p>
+        <ul class="list">
+          <li>порушення гарантійних пломб;</li>
+          <li>механічних, хімічних або теплових пошкоджень;</li>
+          <li>потрапляння усередину сторонніх предметів, рідини або комах;</li>
+          <li>порушення правил експлуатації або транспортування;</li>
+          <li>перепадів напруги в електричній мережі;</li>
+          <li>використання неоригінальних витратних матеріалів.</li>
+        </ul>
+        <p><em>Гарантія не поширюється на витратні матеріали та збереження інформації на носіях даних.</em></p>
+      </div>
+
+      <div class="spacer-xl"></div>
+
+      <div class="meta-row" style="grid-template-columns: 78mm 1fr; width: 165mm; margin: 0 auto;">
+        <div class="label">З умовами гарантійних зобов'язань ознайомлений</div>
+        <div class="value-line">{{clientName}}</div>
+      </div>
+    </section>
+  </body>
+  </html>

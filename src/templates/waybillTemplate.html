@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="uk">
+  <head>
+    <meta charset="UTF-8" />
+    <style>{{document.css}}</style>
+    <title>Видаткова накладна</title>
+  </head>
+  <body>
+    <section class="sheet compact">
+      <div class="doc-line">Видаткова накладна № {{waybill.number}} від {{waybill.date}} р.</div>
+      <div class="rule"></div>
+      <div class="meta-row">
+        <div class="label"><strong>Постачальник:</strong></div>
+        <div>
+          <div><strong>{{company.name}}</strong></div>
+          <div class="small">ЄДРПОУ {{company.edrpou}}</div>
+          <div class="small">{{company.address}}</div>
+          <div class="small">{{company.phone}}</div>
+        </div>
+      </div>
+      <div class="meta-row"><div class="label"><strong>Отримувач:</strong></div><div class="value-line">{{client.name}}</div></div>
+      <div class="meta-row"><div class="label"><strong>ЄДРПОУ / ІПН:</strong></div><div class="value-line">{{client.edrpou}}</div></div>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th style="width:10mm;">№</th>
+            <th>Назва товару</th>
+            <th style="width:24mm;">Кількість</th>
+            <th style="width:30mm;">Ціна, грн</th>
+            <th style="width:32mm;">Сума, грн</th>
+          </tr>
+        </thead>
+        <tbody>{{products.rows}}</tbody>
+      </table>
+      <div class="totals">
+        <div class="totals-row"><div>Сума без ПДВ:</div><div class="right">{{totals.net}}</div></div>
+        <div class="totals-row"><div>ПДВ:</div><div class="right">{{totals.vat}}</div></div>
+        <div class="totals-row"><div>Разом:</div><div class="right">{{totals.gross}}</div></div>
+      </div>
+      <div class="amount-text small">
+        <div>Сума прописом: {{totals.words}}</div>
+        <div>У т.ч. ПДВ: {{totals.vatWords}}</div>
+      </div>
+      <div class="signature-row two">
+        <div class="signature-block"><div>Видав</div><div class="signature-line"></div><div class="right">{{waybill.managerName}}</div></div>
+        <div class="signature-block"><div>Отримав</div><div class="signature-line"></div><div class="right">{{client.name}}</div></div>
+      </div>
+    </section>
+  </body>
+</html>

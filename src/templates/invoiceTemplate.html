@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="uk">
+  <head>
+    <meta charset="UTF-8" />
+    <style>{{document.css}}</style>
+    <title>Рахунок</title>
+  </head>
+  <body>
+    <section class="sheet compact">
+      <div class="doc-line">Рахунок на оплату № {{invoice.number}} від {{invoice.date}} р.</div>
+      <div class="rule"></div>
+      <div class="meta-row">
+        <div class="label"><strong>Постачальник:</strong></div>
+        <div>
+          <div><strong>{{company.name}}</strong></div>
+          <div class="small">ЄДРПОУ {{company.edrpou}} · ІПН {{company.ipn}}</div>
+          <div class="small">{{company.iban}}</div>
+          <div class="small">{{company.bank}}</div>
+          <div class="small">МФО {{company.mfo}}</div>
+          <div class="small">{{company.address}}</div>
+          <div class="small">{{company.phone}}</div>
+          <div class="small">{{company.email}}</div>
+          <div class="small">{{company.vatCertificate}}</div>
+        </div>
+      </div>
+      <div class="spacer-sm"></div>
+      <div class="meta-row"><div class="label"><strong>Покупець:</strong></div><div class="value-line">{{client.name}}</div></div>
+      <div class="meta-row"><div class="label"><strong>ЄДРПОУ / ІПН:</strong></div><div class="value-line">{{client.edrpou}}</div></div>
+      <div class="meta-row"><div class="label"><strong>Телефон:</strong></div><div class="value-line">{{client.phone}}</div></div>
+      <div class="meta-row"><div class="label"><strong>Підстава:</strong></div><div class="value-line">{{invoice.reason}}</div></div>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th style="width:10mm;">№</th>
+            <th>Товар / послуга</th>
+            <th style="width:24mm;">Кількість</th>
+            <th style="width:30mm;">Ціна, грн</th>
+            <th style="width:32mm;">Сума, грн</th>
+          </tr>
+        </thead>
+        <tbody>{{items.rows}}</tbody>
+      </table>
+      <div class="totals">
+        <div class="totals-row"><div>Сума без ПДВ:</div><div class="right">{{totals.net}}</div></div>
+        <div class="totals-row"><div>ПДВ:</div><div class="right">{{totals.vat}}</div></div>
+        <div class="totals-row"><div>Разом:</div><div class="right">{{totals.gross}}</div></div>
+        <div class="totals-row"><div>Оплачено:</div><div class="right">{{totals.paid}}</div></div>
+        <div class="totals-row"><div>До сплати:</div><div class="right">{{totals.debt}}</div></div>
+      </div>
+      <div class="amount-text small">
+        <div>Пристрій: {{order.device}}</div>
+        <div>Серійний номер: {{order.serial}}</div>
+        <div>Несправність: {{order.problem}}</div>
+        <div>Сума прописом: {{totals.words}}</div>
+        <div>У т.ч. ПДВ: {{totals.vatWords}}</div>
+      </div>
+      <div class="rule" style="margin-top:7mm;"></div>
+      <div class="meta-grid" style="grid-template-columns:1fr 72mm;align-items:end;">
+        <div></div>
+        <div>
+          <div class="meta-row" style="grid-template-columns:28mm 1fr;">
+            <div class="label"><strong>Виписав(ла):</strong></div>
+            <div class="value-line">{{invoice.managerName}}</div>
+          </div>
+        </div>
+      </div>
+      <div class="center stamp-note"><strong>Рахунок дійсний впродовж одного банківського дня.</strong></div>
+    </section>
+  </body>
+</html>

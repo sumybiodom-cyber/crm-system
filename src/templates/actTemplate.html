@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="uk">
+  <head>
+    <meta charset="UTF-8" />
+    <style>{{document.css}}</style>
+    <title>Акт</title>
+  </head>
+  <body>
+    <section class="sheet">
+      <div class="header">
+        <div class="brand-mark" aria-hidden="true"></div>
+        <div class="company-block">
+          <div class="company-name">{{company.name}}</div>
+          <div>{{company.address}}</div>
+          <div>{{company.phone}}</div>
+          <div>{{company.email}}</div>
+          <div>{{company.vatCertificate}}</div>
+        </div>
+      </div>
+      <div class="title">Акт виконаних робіт</div>
+      <div class="subtitle">№ {{act.number}} від {{act.date}}</div>
+      <div class="subtitle">Рахунок: {{invoice.reference}}</div>
+      <p class="justify">Виконавець {{company.name}} та замовник {{client.name}} підтверджують виконання робіт по замовленню {{order.id}}.</p>
+      <div class="details-grid">
+        <div><strong>Клієнт:</strong> {{client.name}}</div>
+        <div><strong>Телефон:</strong> {{client.phone}}</div>
+        <div><strong>ЄДРПОУ / ІПН:</strong> {{client.edrpou}}</div>
+        <div><strong>Пристрій:</strong> {{order.device}}</div>
+      </div>
+      <p><strong>Заявлена несправність:</strong></p>
+      <p>{{order.problem}}</p>
+      <p><strong>Виконані роботи / надані послуги:</strong></p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th style="width:10mm;">№</th>
+            <th>Послуга</th>
+            <th style="width:24mm;">Кількість</th>
+            <th style="width:30mm;">Ціна, грн</th>
+            <th style="width:32mm;">Сума, грн</th>
+          </tr>
+        </thead>
+        <tbody>{{services.rows}}</tbody>
+      </table>
+      <p><strong>Використані комплектуючі Виконавця:</strong></p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th style="width:10mm;">№</th>
+            <th>Комплектуюча</th>
+            <th style="width:24mm;">Кількість</th>
+            <th style="width:30mm;">Ціна, грн</th>
+            <th style="width:32mm;">Сума, грн</th>
+          </tr>
+        </thead>
+        <tbody>{{products.rows}}</tbody>
+      </table>
+      <div class="totals">
+        <div class="totals-row"><div>Сума без ПДВ:</div><div class="right">{{totals.net}}</div></div>
+        <div class="totals-row"><div>ПДВ:</div><div class="right">{{totals.vat}}</div></div>
+        <div class="totals-row"><div>Разом:</div><div class="right">{{totals.gross}}</div></div>
+      </div>
+      <div class="amount-text small">
+        <div>Сума прописом: {{totals.words}}</div>
+        <div>У т.ч. ПДВ: {{totals.vatWords}}</div>
+      </div>
+      <div class="signature-row two">
+        <div class="signature-block"><div>Виконавець</div><div class="signature-line"></div><div class="right">{{act.managerName}}</div></div>
+        <div class="signature-block"><div>Клієнт</div><div class="signature-line"></div><div class="right">{{client.name}}</div></div>
+      </div>
+    </section>
+  </body>
+</html>

@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="uk">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Рахунок на оплату</title>
+    <link rel="stylesheet" href="./service-documents.css" />
+  </head>
+  <body>
+    <section class="sheet compact">
+      <div class="doc-line">Рахунок на оплату № {{orderNumber}} від {{date}} р.</div>
+      <div class="rule"></div>
+
+      <div class="meta-row">
+        <div class="label"><strong>Постачальник:</strong></div>
+        <div>
+          <div><strong>{{companyName}}</strong></div>
+          <div class="small">{{companyBankDetails}}</div>
+          <div class="small">{{companyAddress}}</div>
+          <div class="small">{{companyContacts}}</div>
+          <div class="small">{{companyTaxInfo}}</div>
+        </div>
+      </div>
+
+      <div class="spacer-sm"></div>
+
+      <div class="meta-row">
+        <div class="label"><strong>Покупець:</strong></div>
+        <div class="value-line">{{clientName}}</div>
+      </div>
+      <div class="meta-row">
+        <div class="label"><strong>Телефон:</strong></div>
+        <div class="value-line">{{phone}}</div>
+      </div>
+      <div class="meta-row">
+        <div class="label"><strong>Підстава:</strong></div>
+        <div class="value-line">Замовлення {{orderNumber}} від {{date}}</div>
+      </div>
+
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th style="width: 10mm;">№</th>
+            <th>Товар / послуга</th>
+            <th style="width: 24mm;">Кількість</th>
+            <th style="width: 30mm;">Ціна, грн</th>
+            <th style="width: 32mm;">Сума, грн</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{works}}
+          {{parts}}
+        </tbody>
+      </table>
+
+      <div class="totals">
+        <div class="totals-row">
+          <div>Разом:</div>
+          <div class="value">{{total}}</div>
+        </div>
+        <div class="totals-row">
+          <div>Оплачено:</div>
+          <div class="value">{{paid}}</div>
+        </div>
+        <div class="totals-row">
+          <div>До сплати:</div>
+          <div class="value">{{debt}}</div>
+        </div>
+      </div>
+
+      <div class="amount-text small">
+        <div>Пристрій: {{device}}</div>
+        <div>Серійний номер: {{serialNumber}}</div>
+        <div>Несправність: {{problem}}</div>
+      </div>
+
+      <div class="rule" style="margin-top: 7mm;"></div>
+
+      <div class="meta-grid two" style="grid-template-columns: 1fr 72mm; align-items: end;">
+        <div></div>
+        <div>
+          <div class="meta-row" style="grid-template-columns: 28mm 1fr;">
+            <div class="label"><strong>Виписав(ла):</strong></div>
+            <div class="value-line">{{managerName}}</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="center stamp-note"><strong>Рахунок дійсний впродовж одного банківського дня.</strong></div>
+    </section>
+  </body>
+  </html>

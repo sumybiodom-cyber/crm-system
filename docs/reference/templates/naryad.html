@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="uk">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Наряд</title>
+    <link rel="stylesheet" href="./service-documents.css" />
+  </head>
+  <body>
+    <section class="sheet compact">
+      <div class="small">
+        Сервіс-центр: {{companyName}}, код {{companyCode}}, {{companyAddress}}, {{companyContacts}}
+      </div>
+      <div class="doc-line">Наряд № {{orderNumber}} від {{date}}</div>
+
+      <div class="meta-grid">
+        <div class="meta-row">
+          <div class="label">Замовник:</div>
+          <div class="value-line">{{clientName}}</div>
+        </div>
+        <div class="meta-row">
+          <div class="label">Адреса:</div>
+          <div class="value-line">{{clientAddress}}</div>
+        </div>
+        <div class="meta-row">
+          <div class="label">Телефон:</div>
+          <div class="value-line">{{phone}}</div>
+        </div>
+        <div class="meta-row">
+          <div class="label">E-mail:</div>
+          <div class="value-line">{{clientEmail}}</div>
+        </div>
+        <div class="meta-row">
+          <div class="label">Представник:</div>
+          <div class="value-line">{{contactPerson}}</div>
+        </div>
+        <div class="meta-row">
+          <div class="label">Гарантійний:</div>
+          <div class="value-line">{{warrantyFlag}}</div>
+        </div>
+      </div>
+
+      <p><strong>Сервісний центр прийняв виріб:</strong></p>
+
+      <table class="doc-table">
+        <tbody>
+          <tr>
+            <td style="width: 45mm;">Найменування виробу</td>
+            <td colspan="3">{{device}}</td>
+          </tr>
+          <tr>
+            <td>Дата продажу згідно гарантійного талону</td>
+            <td colspan="3">{{saleDate}}</td>
+          </tr>
+          <tr>
+            <td>Серійний номер</td>
+            <td>{{serialNumber}}</td>
+            <td style="width: 28mm;">Продукт номер</td>
+            <td>{{productNumber}}</td>
+          </tr>
+          <tr>
+            <td>Комплектність виробу</td>
+            <td colspan="3">{{deviceSet}}</td>
+          </tr>
+          <tr>
+            <td>Стан виробу</td>
+            <td colspan="3">{{deviceCondition}}</td>
+          </tr>
+          <tr>
+            <td>Заявлена несправність</td>
+            <td colspan="3">{{problem}}</td>
+          </tr>
+          <tr>
+            <td>Виконані роботи</td>
+            <td colspan="3">{{works}}</td>
+          </tr>
+          <tr>
+            <td>Використані запчастини</td>
+            <td colspan="3">{{parts}}</td>
+          </tr>
+          <tr>
+            <td>Примітки</td>
+            <td colspan="3">{{notes}}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="details-grid">
+        <div><strong>Сума робіт:</strong> {{total}}</div>
+        <div><strong>Оплачено:</strong> {{paid}}</div>
+        <div><strong>Борг:</strong> {{debt}}</div>
+        <div><strong>Інженер:</strong> {{engineerName}}</div>
+      </div>
+
+      <div class="terms-box tiny">
+        <p><strong>Умови обслуговування в сервісному центрі НВКПП "Спектр-АС"</strong></p>
+        <p>
+          Виріб вважається гарантійним тільки після попередньої діагностики. Виконуємо ремонт тільки заявлених
+          несправностей. Сервісний центр не несе відповідальності за програмне забезпечення, що міститься у виробі
+          замовника, та за збереження інформації.
+        </p>
+        <p>
+          Про стан виконання замовлення можна дізнатися за телефонами сервісного центру. При отриманні виробу
+          необхідно назвати номер квитанції або замовлення.
+        </p>
+        <p>
+          Строк виконання замовлення: до 14 днів. У разі відсутності необхідних запасних частин термін ремонту
+          може бути продовжено.
+        </p>
+      </div>
+
+      <div class="signature-row">
+        <div class="signature-block">
+          <div>Виконав ремонт:</div>
+          <div class="signature-line"></div>
+          <div class="right">{{engineerName}}</div>
+        </div>
+        <div class="signature-block">
+          <div>Менеджер</div>
+          <div class="signature-line"></div>
+          <div class="right">{{managerName}}</div>
+        </div>
+        <div class="signature-block">
+          <div>Дата завершення ремонту</div>
+          <div class="signature-line">{{completionDate}}</div>
+        </div>
+      </div>
+
+      <div class="spacer-lg"></div>
+
+      <div class="meta-row">
+        <div class="label">З умовами ремонту згоден:</div>
+        <div class="value-line">{{clientName}}</div>
+      </div>
+    </section>
+  </body>
+  </html>

@@ -1,0 +1,285 @@
+@page {
+  size: A4;
+  margin: 12mm;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: #fff;
+  color: #111;
+  font-family: "Times New Roman", Times, serif;
+  font-size: 12pt;
+  line-height: 1.25;
+}
+
+body {
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+.sheet {
+  width: 210mm;
+  min-height: 297mm;
+  margin: 0 auto;
+  padding: 8mm 10mm 10mm;
+  background: #fff;
+}
+
+.sheet.compact {
+  padding-top: 6mm;
+}
+
+.header {
+  display: grid;
+  grid-template-columns: 28mm 1fr;
+  gap: 6mm;
+  align-items: start;
+  margin-bottom: 6mm;
+}
+
+.brand-mark {
+  width: 26mm;
+  height: 23mm;
+  border: 1px solid #444;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 13pt;
+  letter-spacing: 0.5px;
+}
+
+.brand-mark::before {
+  content: "СПЕКТР";
+  position: absolute;
+  top: 1.5mm;
+  left: 2mm;
+  font-size: 6pt;
+  letter-spacing: 0.2px;
+}
+
+.brand-mark::after {
+  content: "АС";
+  position: absolute;
+  bottom: 2mm;
+  right: 2mm;
+  font-size: 16pt;
+  font-weight: 700;
+}
+
+.company-block {
+  font-size: 10.5pt;
+}
+
+.company-name {
+  font-weight: 700;
+}
+
+.small {
+  font-size: 10pt;
+}
+
+.tiny {
+  font-size: 9pt;
+}
+
+.title {
+  text-align: center;
+  font-weight: 700;
+  font-size: 18pt;
+  margin: 8mm 0 2mm;
+}
+
+.subtitle {
+  text-align: center;
+  font-size: 15pt;
+  margin: 0 0 7mm;
+}
+
+.doc-line {
+  font-size: 15pt;
+  font-weight: 700;
+  margin: 3mm 0 5mm;
+}
+
+.rule {
+  border-top: 1px solid #222;
+  margin: 2mm 0;
+}
+
+.meta-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2mm 8mm;
+  margin-bottom: 4mm;
+}
+
+.meta-grid.three {
+  grid-template-columns: 1fr 1fr 1fr;
+}
+
+.meta-row {
+  display: grid;
+  grid-template-columns: 34mm 1fr;
+  align-items: end;
+  gap: 2mm;
+  min-height: 6mm;
+}
+
+.meta-row .label {
+  white-space: nowrap;
+}
+
+.value-line {
+  border-bottom: 1px solid #222;
+  min-height: 5mm;
+  padding: 0 1mm 0.6mm;
+}
+
+.doc-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 3mm 0 5mm;
+}
+
+.doc-table th,
+.doc-table td {
+  border: 1px solid #333;
+  padding: 1.2mm 1.5mm;
+  vertical-align: top;
+}
+
+.doc-table th {
+  font-weight: 700;
+  text-align: center;
+}
+
+.doc-table .right,
+.totals .value {
+  text-align: right;
+}
+
+.doc-table .center {
+  text-align: center;
+}
+
+.shade {
+  background: #e8e8e8;
+}
+
+.terms-box {
+  border: 1px solid #333;
+  padding: 2.5mm 3mm;
+  margin-top: 4mm;
+}
+
+.terms-box p {
+  margin: 0 0 2mm;
+  text-align: justify;
+}
+
+.signature-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 6mm;
+  margin-top: 8mm;
+}
+
+.signature-row.two {
+  grid-template-columns: 1fr 1fr;
+}
+
+.signature-block {
+  display: flex;
+  flex-direction: column;
+  gap: 1mm;
+}
+
+.signature-line {
+  border-bottom: 1px solid #222;
+  min-height: 6mm;
+}
+
+.center {
+  text-align: center;
+}
+
+.justify {
+  text-align: justify;
+}
+
+.totals {
+  width: 92mm;
+  margin-left: auto;
+  margin-top: 2mm;
+}
+
+.totals-row {
+  display: grid;
+  grid-template-columns: 1fr 30mm;
+  gap: 4mm;
+  margin-bottom: 1mm;
+  font-weight: 700;
+}
+
+.amount-text {
+  margin-top: 4mm;
+}
+
+.stamp-note {
+  margin-top: 8mm;
+}
+
+.dashed-cut {
+  border-top: 1px dashed #555;
+  margin: 5mm 0;
+}
+
+.list {
+  margin: 2mm 0 0 5mm;
+}
+
+.list li {
+  margin-bottom: 1mm;
+}
+
+.spacer-xxl {
+  height: 14mm;
+}
+
+.spacer-xl {
+  height: 10mm;
+}
+
+.spacer-lg {
+  height: 6mm;
+}
+
+.spacer-sm {
+  height: 3mm;
+}
+
+.print-note {
+  width: 210mm;
+  margin: 0 auto;
+  padding: 6mm 10mm 10mm;
+  font-family: Arial, sans-serif;
+  font-size: 14px;
+}
+
+@media print {
+  .sheet {
+    margin: 0;
+  }
+
+  .print-note {
+    display: none;
+  }
+}

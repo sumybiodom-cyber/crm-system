@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="uk">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Акт</title>
+    <link rel="stylesheet" href="./service-documents.css" />
+  </head>
+  <body>
+    <section class="sheet">
+      <div class="header">
+        <div class="brand-mark" aria-hidden="true"></div>
+        <div class="company-block">
+          <div class="company-name">{{companyName}}</div>
+          <div>{{companyAddress}}</div>
+          <div>{{companyContacts}}</div>
+          <div>{{companyEmail}}</div>
+        </div>
+      </div>
+
+      <div class="title">АКТ</div>
+      <div class="subtitle">про технічний стан</div>
+      <div class="subtitle">від {{date}}</div>
+
+      <div class="spacer-lg"></div>
+
+      <p><strong>Комісія у складі:</strong></p>
+      <p class="center">
+        голова комісії: представник {{managerName}}<br />
+        члени комісії: інженер {{engineerName}}
+      </p>
+
+      <div class="spacer-lg"></div>
+
+      <p class="justify">
+        Склали цей акт про те, що сервісним центром проведено технічний огляд виробу
+        {{device}} серійний номер {{serialNumber}}, що належить {{clientName}}.
+      </p>
+
+      <div class="spacer-lg"></div>
+
+      <p><strong>Під час огляду встановлено:</strong></p>
+      <p>{{problem}}</p>
+
+      <p><strong>Виконані роботи:</strong></p>
+      <div>{{works}}</div>
+
+      <p><strong>Використані запчастини:</strong></p>
+      <div>{{parts}}</div>
+
+      <p class="justify">
+        <strong>Висновок:</strong>
+        {{conclusion}}
+      </p>
+
+      <div class="spacer-lg"></div>
+
+      <div class="details-grid">
+        <div><strong>Загальна сума:</strong> {{total}}</div>
+        <div><strong>Оплачено:</strong> {{paid}}</div>
+        <div><strong>Борг:</strong> {{debt}}</div>
+        <div><strong>Телефон клієнта:</strong> {{phone}}</div>
+      </div>
+
+      <div class="spacer-xxl"></div>
+
+      <div class="signature-row two">
+        <div class="signature-block">
+          <div>Представник сервісного центру</div>
+          <div class="signature-line"></div>
+          <div class="right">{{managerName}}</div>
+        </div>
+        <div class="signature-block">
+          <div>Інженер сервісного центру</div>
+          <div class="signature-line"></div>
+          <div class="right">{{engineerName}}</div>
+        </div>
+      </div>
+    </section>
+  </body>
+  </html>

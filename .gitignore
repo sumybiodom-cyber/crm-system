@@ -1,0 +1,10 @@
+node_modules/
+dist/
+backups/
+vite-dev.log
+vite-dev.err.log
+*.local
+*.tmp
+*.temp
+Thumbs.db
+.DS_Store
