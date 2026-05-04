@@ -4149,19 +4149,19 @@ function defaultPageForUser(user: User): Page {
   return 'dashboard';
 }
 
-const adminPreviewRoles: Role[] = ['Адміністратор', 'Руководитель', 'Менеджер', 'Інженер', 'Бухгалтер'];
+const adminPreviewRoles: Role[] = ['Адміністратор', 'Руководитель', 'Менеджер', 'Інженер', 'Бухгалтер', 'Комірник', 'Закупник'];
 
 function adminPreviewRoleLabel(role: Role) {
   if (role === 'Руководитель') return 'Керівник';
   return role;
 }
 
-function buildPreviewUser(role: Role, currentUser: User, users: User[]) {
+function buildPreviewUser(role: Role, currentUser: User) {
   if (role === 'Адміністратор') return currentUser;
-  const matchedUser = users.find((user) => user.role === role && user.login !== 'dev.admin');
-  if (matchedUser) return normalizeUserRecord(matchedUser);
   return normalizeUserRecord({
     ...currentUser,
+    id: `preview-${role}`,
+    name: `${adminPreviewRoleLabel(role)} · preview`,
     role,
     permissions: defaultPermissionsForRole(role),
   });
@@ -4530,6 +4530,7 @@ useEffect(() => {
   const [loginChallenge, setLoginChallenge] = useState<LoginChallenge | null>(null);
   const [smsSendWindow, setSmsSendWindow] = useState<Record<string, number[]>>({});
   const [adminPreviewRole, setAdminPreviewRole] = useState<Role>('Адміністратор');
+  const [adminPreviewUserId, setAdminPreviewUserId] = useState('');
   const devRoleHint = !isDevelopmentEnv
     ? ''
     : 'У DEV можна тимчасово зайти кнопкою нижче як адміністратор для первинного налаштування.';
@@ -4653,10 +4654,11 @@ useEffect(() => {
   }, [users, sessionUserRecord, activeUserRecord, autoLoginUser]);
 
   useEffect(() => {
-    if (activeUserRecord?.role !== 'Адміністратор' && adminPreviewRole !== 'Адміністратор') {
-      setAdminPreviewRole('Адміністратор');
+    if (activeUserRecord?.role !== 'Адміністратор') {
+      if (adminPreviewRole !== 'Адміністратор') setAdminPreviewRole('Адміністратор');
+      if (adminPreviewUserId) setAdminPreviewUserId('');
     }
-  }, [activeUserRecord, adminPreviewRole]);
+  }, [activeUserRecord, adminPreviewRole, adminPreviewUserId]);
 
   useEffect(() => {
     if (!quickEngineerId || !users.some((user) => user.id === quickEngineerId && user.role === 'Інженер')) {
@@ -5141,6 +5143,7 @@ useEffect(() => {
       prependActionLog({ id: uid('LOG'), date: today, user: activeUser.name, role: activeUser.role, action: 'Вихід із системи', entity: 'Сесія', comment: 'Сесію завершено користувачем.' });
     }
     setAdminPreviewRole('Адміністратор');
+    setAdminPreviewUserId('');
     setSessionUserId('');
     setActiveUserId('');
     setLoginChallenge(null);
@@ -5153,11 +5156,15 @@ useEffect(() => {
   const sessionUser = sessionUserRecord ?? autoLoginUser;
   const activeUser = activeUserRecord ?? sessionUser;
   const isAdminPreviewAvailable = activeUser.role === 'Адміністратор';
+  const currentRole = adminPreviewRole;
+  const previewUsers = users.filter((user) => user.role === currentRole);
+  const selectedPreviewUser = previewUsers.find((user) => user.id === adminPreviewUserId) ?? null;
+  const currentUser = selectedPreviewUser ?? (currentRole === 'Адміністратор' ? activeUser : null);
   const viewUser = isAdminPreviewAvailable
-    ? buildPreviewUser(adminPreviewRole, activeUser, users)
+    ? (currentUser ? normalizeUserRecord(currentUser) : buildPreviewUser(currentRole, activeUser))
     : activeUser;
 
-  const canSwitchUsers = (sessionUser.role === 'Руководитель' || sessionUser.role === 'Адміністратор') && sessionUser.session === 'Активна';
+  const canSwitchUsers = sessionUser.role === 'Руководитель' && sessionUser.session === 'Активна';
   const isOwnerControlView = sessionUser.role === 'Руководитель' && activeUser.id !== sessionUser.id;
   const canViewPage = (targetPage: Page) => canRoleViewPage(viewUser, targetPage);
   const canDo = (permission: Permission) => roleFinePermissions[viewUser.role].includes(permission);
@@ -9530,10 +9537,11 @@ useEffect(() => {
                 <span>Дивитись як:</span>
                 <select
                   className="role-select"
-                  value={adminPreviewRole}
+                  value={currentRole}
                   onChange={(event) => {
                     const nextRole = event.target.value as Role;
                     setAdminPreviewRole(nextRole);
+                    setAdminPreviewUserId('');
                     stayOnCurrentPage();
                   }}
                   aria-label="Режим перегляду CRM за роллю"
@@ -9541,9 +9549,24 @@ useEffect(() => {
                   {adminPreviewRoles.map((role) => <option key={role} value={role}>{adminPreviewRoleLabel(role)}</option>)}
                 </select>
               </label>
+              <label style={{ display: 'grid', gap: '4px', fontSize: '12px', color: '#475569' }}>
+                <span>Користувач:</span>
+                <select
+                  className="role-select"
+                  value={adminPreviewUserId}
+                  onChange={(event) => {
+                    setAdminPreviewUserId(event.target.value);
+                    stayOnCurrentPage();
+                  }}
+                  aria-label="Вибір співробітника для перегляду"
+                >
+                  <option value="">{currentRole === 'Адміністратор' ? activeUser.name : 'Оберіть співробітника'}</option>
+                  {previewUsers.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
+                </select>
+              </label>
               <div className="current-user-badge">
-                <strong>Перегляд як: {adminPreviewRoleLabel(adminPreviewRole)}</strong>
-                <span>{roleWorkspaceHint(viewUser.role)}</span>
+                <strong>Перегляд як: {adminPreviewRoleLabel(currentRole)}</strong>
+                <span>{currentUser ? currentUser.name : 'Користувача не вибрано'}</span>
               </div>
             </>
           )}
