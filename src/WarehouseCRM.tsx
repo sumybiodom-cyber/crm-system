@@ -2361,47 +2361,12 @@ function limitActionLogs(items: ActionLog[]) {
   return items.slice(0, MAX_ACTION_LOGS);
 }
 
-function isQuotaExceededError(error: unknown) {
-  return error instanceof DOMException && (
-    error.name === 'QuotaExceededError'
-    || error.name === 'NS_ERROR_DOM_QUOTA_REACHED'
-    || error.code === 22
-    || error.code === 1014
-  );
-}
-
 function loadActionLogsFromStorage() {
-  try {
-    const raw = localStorage.getItem(ACTION_LOGS_STORAGE_KEY);
-    if (!raw) {
-      return [
-        { id: 'LOG-1', date: today, user: SYSTEM_USER.name, role: SYSTEM_USER.role, action: 'Ініціалізація системи', entity: 'Сесія', comment: 'CRM запущено без заздалегідь створених співробітників.' },
-      ] as ActionLog[];
-    }
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? limitActionLogs(parsed as ActionLog[]) : [];
-  } catch {
-    return [
-      { id: 'LOG-1', date: today, user: SYSTEM_USER.name, role: SYSTEM_USER.role, action: 'Ініціалізація системи', entity: 'Сесія', comment: 'CRM запущено без заздалегідь створених співробітників.' },
-    ] as ActionLog[];
-  }
+  return [] as ActionLog[];
 }
 
-function saveActionLogsToStorage(items: ActionLog[]) {
-  const limitedItems = limitActionLogs(items);
-  try {
-    localStorage.setItem(ACTION_LOGS_STORAGE_KEY, JSON.stringify(limitedItems));
-  } catch (error) {
-    if (isQuotaExceededError(error)) {
-      try {
-        localStorage.removeItem(ACTION_LOGS_STORAGE_KEY);
-      } catch {
-        // Ignore cleanup errors to avoid breaking the app on storage failures.
-      }
-      return;
-    }
-    throw error;
-  }
+function saveActionLogsToStorage(_items: ActionLog[]) {
+  // Temporarily disabled to prevent QuotaExceededError from crm_action_logs.
 }
 
 function loadCashShiftFromStorage() {
@@ -4651,6 +4616,10 @@ useEffect(() => {
   }, [activeUserId, sessionUserId]);
 
   useEffect(() => {
+    try { localStorage.removeItem(ACTION_LOGS_STORAGE_KEY); } catch {}
+  }, []);
+
+  useEffect(() => {
     if (!query.trim()) {
       setShowGlobalSearchResults(false);
     }
@@ -4806,10 +4775,6 @@ useEffect(() => {
   useEffect(() => {
     saveTaxInvoicesToStorage(taxInvoices);
   }, [taxInvoices]);
-
-  useEffect(() => {
-    saveActionLogsToStorage(actionLogs);
-  }, [actionLogs]);
 
   useEffect(() => {
     saveCashShiftToStorage(cashShift);
@@ -5303,8 +5268,8 @@ useEffect(() => {
     setMovements((current) => [{ id: uid('MOV'), date: today, actor: movement.actor ?? activeUser.name, ...movement }, ...current]);
   }
 
-  function prependActionLog(entry: ActionLog) {
-    setActionLogs((current) => limitActionLogs([entry, ...current]));
+  function prependActionLog(_entry: ActionLog) {
+    // Temporarily disabled to prevent crm_action_logs growth and storage quota errors.
   }
 
   function logAction(action: string, entity: string, comment: string) {
@@ -5392,19 +5357,7 @@ useEffect(() => {
     saveMovementsToStorage(payload.movements);
     saveTaxInvoicesToStorage(payload.taxInvoices ?? []);
     saveCashShiftToStorage(payload.cashShift);
-    const restoredAudit = limitActionLogs([
-      {
-        id: uid('LOG'),
-        date: today,
-        user: activeUser.name,
-        role: activeUser.role,
-        action: 'Відновлення backup',
-        entity: snapshot.id,
-        comment: `Відновлено копію від ${snapshot.createdAt}.`,
-      },
-      ...payload.actionLogs,
-    ]);
-    saveActionLogsToStorage(restoredAudit);
+    const restoredAudit = [] as ActionLog[];
     setUsers(payload.users);
     setCustomerList(payload.clients);
     setProducts(payload.products);
@@ -5419,7 +5372,6 @@ useEffect(() => {
     setMovements(payload.movements);
     setTaxInvoices((payload.taxInvoices ?? []).map(normalizeStoredTaxInvoice));
     setCashShift(payload.cashShift ?? initialCashShift);
-    setActionLogs(restoredAudit);
     setSelectedOrderId(payload.orders[0]?.id ?? '');
     setSelectedProductId(payload.products[0]?.id ?? '');
     setSelectedSaleProductId(payload.products[0]?.id ?? '');
