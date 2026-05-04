@@ -4175,6 +4175,14 @@ function defaultPageForUser(user: User): Page {
   return 'dashboard';
 }
 
+const MENU_NAVIGATION_NOTICE = 'Перехід між розділами тимчасово доступний тільки через ліве меню.';
+
+function notifyMenuOnlyNavigation() {
+  if (typeof window !== 'undefined') {
+    window.alert(MENU_NAVIGATION_NOTICE);
+  }
+}
+
 const adminPreviewRoles: Role[] = ['Адміністратор', 'Руководитель', 'Менеджер', 'Інженер', 'Бухгалтер'];
 
 function adminPreviewRoleLabel(role: Role) {
@@ -4603,16 +4611,19 @@ useEffect(() => {
     return { stockValue, partsInRepairs, ordered, required, salesRevenue, salesDebt, serviceDebt, salesProfit, serviceProfit };
   })();
 
+  function stayOnCurrentPage(message = MENU_NAVIGATION_NOTICE) {
+    setNotice(message);
+  }
+
   function openGlobalSearchResult(result: { type: 'order' | 'client'; id: string }) {
     if (result.type === 'order') {
       setSelectedOrderId(result.id);
-      setPage(hookSafeUser.role === 'Інженер' ? 'my-orders' : 'orders');
       setDashboardFocus(null);
     } else {
       setGlobalFocusedClientPhone(result.id);
       setGlobalClientSearch(query.trim());
-      setPage('clients');
     }
+    stayOnCurrentPage();
     setQuery('');
     setShowGlobalSearchResults(false);
   }
@@ -4652,6 +4663,10 @@ useEffect(() => {
       setShowGlobalSearchResults(false);
     }
   }, [query]);
+
+  useEffect(() => {
+    console.log('PAGE:', page);
+  }, [page]);
 
   useEffect(() => {
     if (sessionUserRecord && sessionUserRecord.session === 'Заблокована') {
@@ -5142,7 +5157,6 @@ useEffect(() => {
     }
     setSessionUserId(devAdmin.id);
     setActiveUserId(devAdmin.id);
-    setPage(defaultPageForUser(devAdmin));
     setShowMenu(false);
     setLoginChallenge(null);
     setLoginCode('');
@@ -5164,7 +5178,6 @@ useEffect(() => {
     setLoginPhone('');
     setLoginError('');
     setLoginHint('');
-    setPage('dashboard');
   }
 
   if (!sessionUserRecord || !activeUserRecord) {
@@ -6213,7 +6226,6 @@ useEffect(() => {
       }, ...current];
     });
     setSelectedOrderId(orderId);
-    setPage('orders');
     enqueueClientNotification(order, 'Прийом пристрою');
     logAction('Швидкий прийом', orderId, `${order.client}: ${order.device}.${engineer ? ` Інженер: ${engineer.name}.` : ''}`);
     logAction('Створення замовлення', orderId, `${order.client} · ${order.device} · статус Прийнято.`);
@@ -9567,7 +9579,7 @@ useEffect(() => {
             </div>
           )}
           {visibleInternalMessages.length > 0 && (
-            <button className="icon-button notification-button" aria-label="Центр повідомлень" onClick={() => setPage('dashboard')}>
+            <button className="icon-button notification-button" aria-label="Центр повідомлень" onClick={() => stayOnCurrentPage()}>
               <Bell size={19} />
               {unreadInternalMessages > 0 && <span>{unreadInternalMessages}</span>}
             </button>
@@ -9585,9 +9597,8 @@ useEffect(() => {
                   value={adminPreviewRole}
                   onChange={(event) => {
                     const nextRole = event.target.value as Role;
-                    const nextViewUser = buildPreviewUser(nextRole, activeUser, users);
                     setAdminPreviewRole(nextRole);
-                    setPage(defaultPageForUser(nextViewUser));
+                    stayOnCurrentPage();
                   }}
                   aria-label="Режим перегляду CRM за роллю"
                 >
@@ -9606,8 +9617,8 @@ useEffect(() => {
               type="button"
               onClick={() => {
                 setActiveUserId(sessionUser.id);
-                setPage('dashboard');
                 prependActionLog({ id: uid('LOG'), date: today, user: sessionUser.name, role: sessionUser.role, action: 'Повернення до керівника', entity: 'Робочий стіл', comment: 'Керівник повернувся зі службового перегляду ролі.' });
+                stayOnCurrentPage();
               }}
             >
               До керівника
@@ -9620,8 +9631,8 @@ useEffect(() => {
               onChange={(event) => {
                 const nextUser = users.find((user) => user.id === event.target.value) ?? sessionUser;
                 setActiveUserId(nextUser.id);
-                setPage(defaultPageForUser(nextUser));
                 prependActionLog({ id: uid('LOG'), date: today, user: sessionUser.name, role: sessionUser.role, action: 'Контроль ролі', entity: 'Робочий стіл', comment: `Керівник відкрив робочий стіл ролі ${nextUser.role}: ${nextUser.name}.` });
+                stayOnCurrentPage();
               }}
               aria-label="Перемикання ролі для контролю керівником"
             >
@@ -9863,7 +9874,7 @@ useEffect(() => {
             openClientRecord={(phone, search) => {
               setGlobalFocusedClientPhone(phone);
               setGlobalClientSearch(search ?? '');
-              setPage('clients');
+              stayOnCurrentPage();
             }}
             orderVersions={orderVersions}
             suggestedDocumentAction={suggestedDocumentAction}
@@ -9967,7 +9978,7 @@ useEffect(() => {
             openClientRecord={(phone, search) => {
               setGlobalFocusedClientPhone(phone);
               setGlobalClientSearch(search ?? '');
-              setPage('clients');
+              stayOnCurrentPage();
             }}
             orderVersions={orderVersions}
             suggestedDocumentAction={suggestedDocumentAction}
@@ -10034,7 +10045,7 @@ useEffect(() => {
             bankImportItems={bankImportItems}
             simplePayments={simplePayments}
             users={users}
-            onOpenClients={() => setPage('clients')}
+            onOpenClients={() => stayOnCurrentPage()}
           />
         )}
         {canViewPage(page) && page === 'reports' && <ReportsPage orders={orders} sales={sales} purchases={purchases} receipts={receipts} movements={movements} products={products} actionLogs={actionLogs} cashShift={cashShift} canDo={canDo} exportAccounting={exportAccounting} />}
@@ -10122,7 +10133,7 @@ function InboxPage({
   const openOrder = (orderId: string, target?: DashboardFocusTarget) => {
     if (target) setDashboardFocus({ orderId, target });
     setSelectedOrderId(orderId);
-    setPage('orders');
+    notifyMenuOnlyNavigation();
   };
 
   const tasks: InboxTask[] = [];
@@ -10188,7 +10199,7 @@ function InboxPage({
         tone: 'urgent',
         text: `Платежі на перевірці: ${bankImportItems.filter((item) => item.status === 'review').length}`,
         actionLabel: 'Перевірити',
-        onAction: () => setPage('bank-import'),
+        onAction: () => notifyMenuOnlyNavigation(),
       });
     }
   }
@@ -10203,7 +10214,7 @@ function InboxPage({
           tone: 'today',
           text: `${order.id} взяти в роботу`,
           actionLabel: 'Почати',
-          onAction: () => setPage('my-orders'),
+          onAction: () => notifyMenuOnlyNavigation(),
         });
       });
 
@@ -10217,7 +10228,7 @@ function InboxPage({
           tone: hoursSince(order.statusChangedAt) >= ENGINEER_OVERDUE_HOURS ? 'urgent' : 'later',
           text: `${order.id} завершити роботу`,
           actionLabel: 'Готово',
-          onAction: () => setPage('my-orders'),
+          onAction: () => notifyMenuOnlyNavigation(),
         });
       });
   }
@@ -10237,7 +10248,7 @@ function InboxPage({
           tone: available(product) < Math.max(product.min, 1) ? 'urgent' : 'today',
           text: `${product.sku} нижче мінімуму`,
           actionLabel: hasOpenPurchase ? 'Відкрити закупку' : 'Створити закупку',
-          onAction: () => setPage('purchases'),
+          onAction: () => notifyMenuOnlyNavigation(),
         });
       });
 
@@ -10251,7 +10262,7 @@ function InboxPage({
           tone: item.status === 'В дорозі' ? 'today' : 'later',
           text: `${product?.name ?? item.productId} ${item.status.toLowerCase()}`,
           actionLabel: 'Відкрити',
-          onAction: () => setPage('purchases'),
+          onAction: () => notifyMenuOnlyNavigation(),
         });
       });
   }
@@ -10820,12 +10831,12 @@ function Dashboard({
   const dashboardTodayLabel = new Date().toLocaleDateString('uk-UA', { day: '2-digit', month: '2-digit' });
   const openManagerOrder = (orderId: string) => {
     setSelectedOrderId(orderId);
-    setPage('orders');
+    notifyMenuOnlyNavigation();
   };
   const openManagerOrderWithFocus = (order: ServiceOrder, target: DashboardFocusTarget) => {
     setDashboardFocus({ orderId: order.id, target });
     setSelectedOrderId(order.id);
-    setPage('orders');
+    notifyMenuOnlyNavigation();
   };
   const callClient = (order: ServiceOrder) => {
     recordManagerCall(order);
@@ -10982,7 +10993,7 @@ function Dashboard({
 
         <section className="executive-summary-strip">
           {directorKpis.map((item) => (
-            <button key={item.label} type="button" className="executive-summary-item" onClick={() => setPage(item.page)}>
+            <button key={item.label} type="button" className="executive-summary-item" onClick={() => notifyMenuOnlyNavigation()}>
               <span>{item.label}</span>
               <strong>{item.value}</strong>
             </button>
@@ -10998,11 +11009,11 @@ function Dashboard({
             <div className="executive-block">
               <div className="executive-block-head">
                 <strong>Борги клієнтів</strong>
-                <button type="button" className="executive-link-button" onClick={() => setPage('problem-clients')}>Відкрити</button>
+                <button type="button" className="executive-link-button" onClick={() => notifyMenuOnlyNavigation()}>Відкрити</button>
               </div>
               <div className="executive-list executive-alert-list">
                 {debtorRows.map((row) => (
-                  <button key={row.client.phone} type="button" className="executive-order-row executive-order-alert executive-row-button" onClick={() => setPage('problem-clients')}>
+                  <button key={row.client.phone} type="button" className="executive-order-row executive-order-alert executive-row-button" onClick={() => notifyMenuOnlyNavigation()}>
                     <div>
                       <strong>{row.client.name}</strong>
                       <span>{row.maxDays} дн.</span>
@@ -11019,11 +11030,11 @@ function Dashboard({
             <div className="executive-block">
               <div className="executive-block-head">
                 <strong>Без оплати</strong>
-                <button type="button" className="executive-link-button" onClick={() => setPage('orders')}>Відкрити</button>
+                <button type="button" className="executive-link-button" onClick={() => notifyMenuOnlyNavigation()}>Відкрити</button>
               </div>
               <div className="executive-list">
                 {unpaidDirectorOrders.map((order) => (
-                  <button key={order.id} type="button" className="executive-order-row executive-row-button" onClick={() => { setSelectedOrderId(order.id); setPage('orders'); }}>
+                  <button key={order.id} type="button" className="executive-order-row executive-row-button" onClick={() => { setSelectedOrderId(order.id); notifyMenuOnlyNavigation(); }}>
                     <div>
                       <strong>{order.id}</strong>
                       <span>{order.client}</span>
@@ -11040,11 +11051,11 @@ function Dashboard({
             <div className="executive-block">
               <div className="executive-block-head">
                 <strong>Без інженера</strong>
-                <button type="button" className="executive-link-button" onClick={() => setPage('orders')}>Відкрити</button>
+                <button type="button" className="executive-link-button" onClick={() => notifyMenuOnlyNavigation()}>Відкрити</button>
               </div>
               <div className="executive-list">
                 {noEngineerDirectorOrders.map((order) => (
-                  <button key={order.id} type="button" className="executive-order-row executive-row-button" onClick={() => { setSelectedOrderId(order.id); setPage('orders'); }}>
+                  <button key={order.id} type="button" className="executive-order-row executive-row-button" onClick={() => { setSelectedOrderId(order.id); notifyMenuOnlyNavigation(); }}>
                     <div>
                       <strong>{order.id}</strong>
                       <span>{order.device}</span>
@@ -11061,11 +11072,11 @@ function Dashboard({
             <div className="executive-block">
               <div className="executive-block-head">
                 <strong>Нижче мінімуму</strong>
-                <button type="button" className="executive-link-button" onClick={() => setPage('parts')}>Відкрити</button>
+                <button type="button" className="executive-link-button" onClick={() => notifyMenuOnlyNavigation()}>Відкрити</button>
               </div>
               <div className="executive-list">
                 {belowMinProducts.map((product) => (
-                  <button key={product.id} type="button" className="executive-order-row executive-row-button" onClick={() => setPage('parts')}>
+                  <button key={product.id} type="button" className="executive-order-row executive-row-button" onClick={() => notifyMenuOnlyNavigation()}>
                     <div>
                       <strong>{product.sku}</strong>
                       <span>{product.name}</span>
@@ -11088,22 +11099,22 @@ function Dashboard({
               <span>{extractDayKey(today)}</span>
             </div>
             <div className="executive-money-grid">
-              <button type="button" className="executive-summary-item" onClick={() => setPage('cash')}>
+              <button type="button" className="executive-summary-item" onClick={() => notifyMenuOnlyNavigation()}>
                 <span>Прихід</span>
                 <strong>{money(incomingToday)}</strong>
               </button>
-              <button type="button" className="executive-summary-item" onClick={() => setPage('purchases')}>
+              <button type="button" className="executive-summary-item" onClick={() => notifyMenuOnlyNavigation()}>
                 <span>Витрата</span>
                 <strong>{money(outgoingToday)}</strong>
               </button>
-              <button type="button" className="executive-summary-item" onClick={() => setPage('finance')}>
+              <button type="button" className="executive-summary-item" onClick={() => notifyMenuOnlyNavigation()}>
                 <span>Баланс</span>
                 <strong>{money(balanceToday)}</strong>
               </button>
             </div>
             <div className="executive-list">
               {bankRows.map((row) => (
-                <button key={row.account.id} type="button" className="executive-list-row executive-row-button" onClick={() => setPage('bank-import')}>
+                <button key={row.account.id} type="button" className="executive-list-row executive-row-button" onClick={() => notifyMenuOnlyNavigation()}>
                   <span>{row.account.bankName}</span>
                   <strong>{money(row.incoming)}</strong>
                 </button>
@@ -11119,11 +11130,11 @@ function Dashboard({
             <div className="executive-block">
               <div className="executive-block-head">
                 <strong>Топ прибуткових послуг</strong>
-                <button type="button" className="executive-link-button" onClick={() => setPage('finance')}>Відкрити</button>
+                <button type="button" className="executive-link-button" onClick={() => notifyMenuOnlyNavigation()}>Відкрити</button>
               </div>
               <div className="executive-list">
                 {topServiceRows.map((row) => (
-                  <button key={row.label} type="button" className="executive-list-row executive-row-button" onClick={() => setPage('finance')}>
+                  <button key={row.label} type="button" className="executive-list-row executive-row-button" onClick={() => notifyMenuOnlyNavigation()}>
                     <span>{row.label}</span>
                     <strong>{money(row.amount)}</strong>
                   </button>
@@ -11134,11 +11145,11 @@ function Dashboard({
             <div className="executive-block">
               <div className="executive-block-head">
                 <strong>Зависші замовлення</strong>
-                <button type="button" className="executive-link-button" onClick={() => setPage('orders')}>Відкрити</button>
+                <button type="button" className="executive-link-button" onClick={() => notifyMenuOnlyNavigation()}>Відкрити</button>
               </div>
               <div className="executive-list executive-alert-list">
                 {stuckBusinessOrders.map(({ order, days }) => (
-                  <button key={order.id} type="button" className="executive-order-row executive-order-alert executive-row-button" onClick={() => { setSelectedOrderId(order.id); setPage('orders'); }}>
+                  <button key={order.id} type="button" className="executive-order-row executive-order-alert executive-row-button" onClick={() => { setSelectedOrderId(order.id); notifyMenuOnlyNavigation(); }}>
                     <div>
                       <strong>{order.id}</strong>
                       <span>{order.client}</span>
@@ -11218,7 +11229,7 @@ function Dashboard({
                 <span>{problem.type}<small>{problem.description}</small></span>
                 <span>{problem.days}</span>
                 <span>{problem.responsible}</span>
-                <span><button type="button" onClick={() => { setSelectedOrderId(problem.orderId); setPage('orders'); }}>Відкрити заказ</button></span>
+                <span><button type="button" onClick={() => { setSelectedOrderId(problem.orderId); notifyMenuOnlyNavigation(); }}>Відкрити заказ</button></span>
               </div>
             ))}
           </div>
@@ -16861,10 +16872,10 @@ function ProblemClientsPage({ orders, documents, setPage, setSelectedOrderId }: 
               <span>{problem.days} дн.</span>
               <span>{problem.responsible}<small>менеджер {problem.manager} · інженер {problem.engineer}</small></span>
               <span>
-                <button type="button" onClick={() => { setSelectedOrderId(problem.orderId); setPage('orders'); }}>Відкрити заказ</button>
-                {problem.target === 'payment' && <button type="button" onClick={() => { setSelectedOrderId(problem.orderId); setPage('orders'); }}>До оплати</button>}
-                {problem.target === 'act' && <button type="button" onClick={() => setPage('documents')}>До акта</button>}
-                {problem.target === 'document' && <button type="button" onClick={() => setPage('documents')}>До документа</button>}
+                <button type="button" onClick={() => { setSelectedOrderId(problem.orderId); notifyMenuOnlyNavigation(); }}>Відкрити заказ</button>
+                {problem.target === 'payment' && <button type="button" onClick={() => { setSelectedOrderId(problem.orderId); notifyMenuOnlyNavigation(); }}>До оплати</button>}
+                {problem.target === 'act' && <button type="button" onClick={() => notifyMenuOnlyNavigation()}>До акта</button>}
+                {problem.target === 'document' && <button type="button" onClick={() => notifyMenuOnlyNavigation()}>До документа</button>}
               </span>
             </div>
           ))}
