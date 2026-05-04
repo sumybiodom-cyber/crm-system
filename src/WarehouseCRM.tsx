@@ -2419,6 +2419,21 @@ const SYSTEM_USER: User = {
   session: 'Активна',
 };
 
+function buildTemporaryAutoAdmin(): User {
+  return {
+    id: 'auto-admin',
+    name: 'Тимчасовий адміністратор',
+    role: 'Адміністратор',
+    twoFactor: false,
+    login: 'auto.admin',
+    phone: undefined,
+    email: 'auto-admin@local.crm',
+    authMode: 'phone_code',
+    permissions: defaultPermissionsForRole('Адміністратор'),
+    session: 'Активна',
+  };
+}
+
 const companyBankAccounts: BankAccountRecord[] = [
   { id: 'BANK-RAIF-1', bankName: 'Райффайзен', iban: 'UA123808050000000002600000001', currency: 'UAH', legalType: 'ТОВ' },
   { id: 'BANK-PRIVAT-1', bankName: 'ПриватБанк', iban: 'UA213052990000026005000000002', currency: 'UAH', legalType: 'ФОП' },
@@ -4527,6 +4542,7 @@ useEffect(() => {
 
   const sessionUserRecord = users.find((user) => user.id === sessionUserId) ?? null;
   const activeUserRecord = users.find((user) => user.id === activeUserId) ?? sessionUserRecord;
+  const autoLoginUser = users.find((user) => user.role === 'Адміністратор') ?? users[0] ?? buildTemporaryAutoAdmin();
   const hookSafeUser = activeUserRecord ?? sessionUserRecord ?? SYSTEM_USER;
   const hookSafeVisibleOrders = hookSafeUser.role === 'Інженер'
     ? orders.filter((order) => order.engineer === hookSafeUser.name && !['Готовий до видачі', 'Не підлягає ремонту', 'Видано', 'Закрито', 'Скасовано'].includes(order.status))
@@ -4626,14 +4642,21 @@ useEffect(() => {
   }, [query]);
 
   useEffect(() => {
-    if (sessionUserRecord && sessionUserRecord.session === 'Заблокована') {
-      setSessionUserId('');
-      setActiveUserId('');
-      setLoginChallenge(null);
-      setLoginCode('');
-      setLoginError('Ваш доступ заблоковано. Зверніться до адміністратора.');
+    if (users.length === 0) {
+      const fallbackAdmin = buildTemporaryAutoAdmin();
+      setUsers([fallbackAdmin]);
+      saveEmployeesToStorage([fallbackAdmin]);
+      if (!sessionUserRecord) setSessionUserId(fallbackAdmin.id);
+      if (!activeUserRecord) setActiveUserId(fallbackAdmin.id);
+      return;
     }
-  }, [sessionUserRecord]);
+    if (!sessionUserRecord) {
+      setSessionUserId(autoLoginUser.id);
+    }
+    if (!activeUserRecord) {
+      setActiveUserId(sessionUserRecord?.id ?? autoLoginUser.id);
+    }
+  }, [users, sessionUserRecord, activeUserRecord, autoLoginUser]);
 
   useEffect(() => {
     if (activeUserRecord?.role !== 'Адміністратор' && adminPreviewRole !== 'Адміністратор') {
@@ -5133,29 +5156,8 @@ useEffect(() => {
     setLoginHint('');
   }
 
-  if (!sessionUserRecord || !activeUserRecord) {
-    return (
-      <EmployeeLoginScreen
-        phone={loginPhone}
-        code={loginCode}
-        challenge={loginChallenge}
-        error={loginError}
-        hint={loginHint}
-        smsMode={showCodeOnScreen ? 'DEV' : smsMode}
-        devMode={isDevelopmentEnv}
-        devRoleHint={devRoleHint}
-        onDevAdminLogin={loginAsDevAdmin}
-        onPhoneChange={setLoginPhone}
-        onCodeChange={setLoginCode}
-        onRequestCode={requestPhoneCode}
-        onVerifyCode={verifyPhoneCode}
-        onBack={resetPhoneLogin}
-      />
-    );
-  }
-
-  const sessionUser = sessionUserRecord;
-  const activeUser = activeUserRecord;
+  const sessionUser = sessionUserRecord ?? autoLoginUser;
+  const activeUser = activeUserRecord ?? sessionUser;
   const isAdminPreviewAvailable = activeUser.role === 'Адміністратор';
   const viewUser = isAdminPreviewAvailable
     ? buildPreviewUser(adminPreviewRole, activeUser, users)
