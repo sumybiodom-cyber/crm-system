@@ -2491,13 +2491,13 @@ const rolePermissions: Record<Role, string[]> = {
 const baseEmployeeRoles: Role[] = ['Адміністратор', 'Руководитель', 'Менеджер', 'Інженер', 'Бухгалтер'];
 
 const rolePageAccess: Record<Role, Page[]> = {
-  Руководитель: ['dashboard', 'inbox', 'employee-control', 'contracts', 'bank-import', 'orders', 'my-orders', 'sales', 'clients', 'parts', 'purchases', 'cash', 'returns', 'documents', 'tax-invoices', 'bas-exchange', 'problem-clients', 'order-units', 'storage', 'movements', 'finance', 'reports', 'payroll', 'acceptance', 'team'],
-  Адміністратор: ['dashboard', 'inbox', 'employee-control', 'contracts', 'bank-import', 'orders', 'my-orders', 'sales', 'clients', 'parts', 'purchases', 'cash', 'returns', 'documents', 'tax-invoices', 'bas-exchange', 'problem-clients', 'order-units', 'storage', 'movements', 'finance', 'reports', 'payroll', 'acceptance', 'team', 'settings'],
-  Менеджер: ['inbox', 'orders', 'my-orders', 'contracts', 'bank-import', 'clients', 'sales', 'cash', 'documents', 'problem-clients'],
-  Інженер: ['inbox', 'dashboard', 'my-orders'],
-  Комірник: ['inbox', 'dashboard', 'parts', 'purchases', 'storage', 'movements'],
-  Бухгалтер: ['inbox', 'dashboard', 'bank-import', 'cash', 'documents', 'tax-invoices', 'bas-exchange', 'reports'],
-  Закупник: ['inbox', 'dashboard', 'parts', 'purchases', 'movements', 'reports', 'team'],
+  Руководитель: navItems.map((item) => item.id),
+  Адміністратор: navItems.map((item) => item.id),
+  Менеджер: ['clients', 'orders'],
+  Інженер: ['my-orders'],
+  Комірник: ['parts', 'purchases', 'storage', 'movements'],
+  Бухгалтер: ['finance', 'cash', 'documents', 'bank-import', 'reports', 'tax-invoices'],
+  Закупник: ['parts', 'purchases', 'storage', 'movements'],
 };
 
 const roleFinePermissions: Record<Role, Permission[]> = {
@@ -3986,19 +3986,16 @@ function normalizeUsers(records: User[]) {
   return records.map(normalizeUserRecord);
 }
 
-function pageRequiresPermission(page: Page): keyof UserPermissions | null {
-  if (['parts', 'purchases', 'storage', 'movements'].includes(page)) return 'canAccessWarehouse';
-  if (['finance', 'payroll'].includes(page)) return 'canAccessFinance';
-  if (page === 'team') return 'canAccessEmployees';
-  if (page === 'settings') return 'canAccessSettings';
-  if (page === 'reports') return 'canAccessReports';
-  return null;
+function hasAccess(role: Role, page: Page) {
+  return rolePageAccess[role].includes(page);
 }
 
 function canRoleViewPage(user: User, targetPage: Page) {
-  if (rolePageAccess[user.role].includes(targetPage)) return true;
-  const requiredPermission = pageRequiresPermission(targetPage);
-  return requiredPermission ? user.permissions[requiredPermission] : false;
+  return hasAccess(user.role, targetPage);
+}
+
+function getEngineerAssignedUserId(order: ServiceOrder, users: User[]) {
+  return users.find((user) => user.role === 'Інженер' && user.name === order.engineer)?.id ?? '';
 }
 
 function navLabelForRole(page: Page, role: Role) {
@@ -4143,15 +4140,12 @@ function buildServiceProblems(orders: ServiceOrder[], documents: PrintDocument[]
 }
 
 function defaultPageForUser(user: User): Page {
-  if (user.role === 'Адміністратор') return 'team';
+  if (user.role === 'Адміністратор') return 'dashboard';
   if (user.role === 'Руководитель') return 'dashboard';
-  if (user.role === 'Менеджер') return 'inbox';
-  if (user.role === 'Інженер') return 'inbox';
-  if (user.role === 'Бухгалтер') return user.permissions.canAccessReports ? 'reports' : 'cash';
-  if (user.role === 'Комірник' || user.role === 'Закупник') return 'inbox';
-  if (user.permissions.canAccessWarehouse) return 'storage';
-  if (user.permissions.canAccessReports) return 'reports';
-  if (user.permissions.canAccessFinance) return 'cash';
+  if (user.role === 'Менеджер') return 'orders';
+  if (user.role === 'Інженер') return 'my-orders';
+  if (user.role === 'Бухгалтер') return 'finance';
+  if (user.role === 'Комірник' || user.role === 'Закупник') return 'parts';
   return 'dashboard';
 }
 
@@ -4545,7 +4539,7 @@ useEffect(() => {
   const autoLoginUser = users.find((user) => user.role === 'Адміністратор') ?? users[0] ?? buildTemporaryAutoAdmin();
   const hookSafeUser = activeUserRecord ?? sessionUserRecord ?? SYSTEM_USER;
   const hookSafeVisibleOrders = hookSafeUser.role === 'Інженер'
-    ? orders.filter((order) => order.engineer === hookSafeUser.name && !['Готовий до видачі', 'Не підлягає ремонту', 'Видано', 'Закрито', 'Скасовано'].includes(order.status))
+    ? orders.filter((order) => getEngineerAssignedUserId(order, users) === hookSafeUser.id && !['Готовий до видачі', 'Не підлягає ремонту', 'Видано', 'Закрито', 'Скасовано'].includes(order.status))
     : orders;
   const filteredOrders = (() => {
     const needle = query.trim();
@@ -5169,7 +5163,7 @@ useEffect(() => {
   const canDo = (permission: Permission) => roleFinePermissions[viewUser.role].includes(permission);
   const visibleNavItems = navItems.filter((item) => canViewPage(item.id));
   const hideGlobalSearch = viewUser.role === 'Менеджер' && (page === 'orders' || page === 'my-orders');
-  const engineerOwnOrders = viewUser.role === 'Інженер' ? orders.filter((order) => order.engineer === viewUser.name) : orders;
+  const engineerOwnOrders = viewUser.role === 'Інженер' ? orders.filter((order) => getEngineerAssignedUserId(order, users) === viewUser.id) : orders;
   const managerOwnOrders = viewUser.role === 'Менеджер' ? orders.filter((order) => order.manager === viewUser.name) : orders;
   const engineerHiddenAfterReady: OrderStatus[] = ['Готовий до видачі', 'Не підлягає ремонту', 'Видано', 'Закрито', 'Скасовано'];
   const visibleOrders = viewUser.role === 'Інженер'
@@ -10250,7 +10244,7 @@ function AccessDenied({ activeUser, page }: { activeUser: User; page: Page }) {
   const pageName = navLabelForRole(page, activeUser.role);
   return (
     <div className="page-grid">
-      <PageTitle eyebrow="Доступ обмежено" title="Цей розділ приховано для ролі" text={`Користувач ${activeUser.name} має роль ${activeUser.role}. Розділ "${pageName}" не входить у мінімально необхідний доступ для цієї ролі.`} />
+      <PageTitle eyebrow="Доступ обмежено" title="Этот раздел скрыт для роли" text={`Користувач ${activeUser.name} має роль ${activeUser.role}. Розділ "${pageName}" не входить у мінімально необхідний доступ для цієї ролі.`} />
       <section className="panel">
         <div className="task-list">
           <Task icon={<ShieldCheck />} title="Принцип безпеки" text="Співробітник бачить тільки ті модулі й дії, які потрібні для його роботи." />
