@@ -4562,9 +4562,6 @@ useEffect(() => {
 
   const sessionUserRecord = users.find((user) => user.id === sessionUserId) ?? null;
   const activeUserRecord = users.find((user) => user.id === activeUserId) ?? sessionUserRecord;
-  const pageAccessUser = activeUserRecord
-    ? (activeUserRecord.role === 'Адміністратор' ? buildPreviewUser(adminPreviewRole, activeUserRecord, users) : activeUserRecord)
-    : null;
   const hookSafeUser = activeUserRecord ?? sessionUserRecord ?? SYSTEM_USER;
   const hookSafeVisibleOrders = hookSafeUser.role === 'Інженер'
     ? orders.filter((order) => order.engineer === hookSafeUser.name && !['Готовий до видачі', 'Не підлягає ремонту', 'Видано', 'Закрито', 'Скасовано'].includes(order.status))
@@ -4671,12 +4668,6 @@ useEffect(() => {
       setAdminPreviewRole('Адміністратор');
     }
   }, [activeUserRecord, adminPreviewRole]);
-
-  useEffect(() => {
-    if (pageAccessUser && !canRoleViewPage(pageAccessUser, page)) {
-      setPage(defaultPageForUser(pageAccessUser));
-    }
-  }, [pageAccessUser, page]);
 
   useEffect(() => {
     if (!quickEngineerId || !users.some((user) => user.id === quickEngineerId && user.role === 'Інженер')) {
