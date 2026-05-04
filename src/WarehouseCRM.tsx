@@ -2011,6 +2011,7 @@ const MOVEMENTS_STORAGE_KEY = 'crm_movements';
 const ACTION_LOGS_STORAGE_KEY = 'crm_action_logs';
 const BACKUPS_STORAGE_KEY = 'crm_backups';
 const CASH_SHIFT_STORAGE_KEY = 'crm_cash_shift';
+const MAX_ACTION_LOGS = 100;
 
 function loadEmployeesFromStorage(): User[] {
   try {
@@ -2356,6 +2357,19 @@ function saveMovementsToStorage(items: StockMovement[]) {
   localStorage.setItem(MOVEMENTS_STORAGE_KEY, JSON.stringify(items));
 }
 
+function limitActionLogs(items: ActionLog[]) {
+  return items.slice(0, MAX_ACTION_LOGS);
+}
+
+function isQuotaExceededError(error: unknown) {
+  return error instanceof DOMException && (
+    error.name === 'QuotaExceededError'
+    || error.name === 'NS_ERROR_DOM_QUOTA_REACHED'
+    || error.code === 22
+    || error.code === 1014
+  );
+}
+
 function loadActionLogsFromStorage() {
   try {
     const raw = localStorage.getItem(ACTION_LOGS_STORAGE_KEY);
@@ -2365,7 +2379,7 @@ function loadActionLogsFromStorage() {
       ] as ActionLog[];
     }
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed as ActionLog[] : [];
+    return Array.isArray(parsed) ? limitActionLogs(parsed as ActionLog[]) : [];
   } catch {
     return [
       { id: 'LOG-1', date: today, user: SYSTEM_USER.name, role: SYSTEM_USER.role, action: 'Ініціалізація системи', entity: 'Сесія', comment: 'CRM запущено без заздалегідь створених співробітників.' },
@@ -2374,7 +2388,20 @@ function loadActionLogsFromStorage() {
 }
 
 function saveActionLogsToStorage(items: ActionLog[]) {
-  localStorage.setItem(ACTION_LOGS_STORAGE_KEY, JSON.stringify(items));
+  const limitedItems = limitActionLogs(items);
+  try {
+    localStorage.setItem(ACTION_LOGS_STORAGE_KEY, JSON.stringify(limitedItems));
+  } catch (error) {
+    if (isQuotaExceededError(error)) {
+      try {
+        localStorage.removeItem(ACTION_LOGS_STORAGE_KEY);
+      } catch {
+        // Ignore cleanup errors to avoid breaking the app on storage failures.
+      }
+      return;
+    }
+    throw error;
+  }
 }
 
 function loadCashShiftFromStorage() {
@@ -5041,7 +5068,7 @@ useEffect(() => {
       setLoginError('');
       setLoginHint(showCodeOnScreen ? `Демо SMS: код для ${user.name} — ${code}` : '');
       if (showCodeOnScreen) setNotice(`SMS-код для ${user.name}: ${code}`);
-      setActionLogs((current) => [{ id: uid('LOG'), date: today, user: user.name, role: user.role, action: 'Запит коду входу', entity: 'Авторизація', comment: `Надіслано одноразовий код на ${user.phone ?? 'телефон співробітника'}.` }, ...current]);
+      prependActionLog({ id: uid('LOG'), date: today, user: user.name, role: user.role, action: 'Запит коду входу', entity: 'Авторизація', comment: `Надіслано одноразовий код на ${user.phone ?? 'телефон співробітника'}.` });
     } catch (error) {
       setLoginError(error instanceof Error ? error.message : 'Не вдалося надіслати SMS-код.');
       setLoginHint('');
@@ -5090,7 +5117,7 @@ useEffect(() => {
     setLoginPhone('');
     setLoginError('');
     setLoginHint('');
-    setActionLogs((current) => [{ id: uid('LOG'), date: today, user: user.name, role: user.role, action: 'Вхід у систему', entity: 'Сесія', comment: 'Вхід по телефону і одноразовому коду.' }, ...current]);
+    prependActionLog({ id: uid('LOG'), date: today, user: user.name, role: user.role, action: 'Вхід у систему', entity: 'Сесія', comment: 'Вхід по телефону і одноразовому коду.' });
   }
 
   function resetPhoneLogin() {
@@ -5131,12 +5158,12 @@ useEffect(() => {
     setLoginPhone('');
     setLoginError('');
     setLoginHint('');
-    setActionLogs((current) => [{ id: uid('LOG'), date: today, user: devAdmin.name, role: devAdmin.role, action: 'DEV вхід', entity: 'Сесія', comment: 'Тимчасовий безпечний DEV-вхід для первинного налаштування співробітників.' }, ...current]);
+    prependActionLog({ id: uid('LOG'), date: today, user: devAdmin.name, role: devAdmin.role, action: 'DEV вхід', entity: 'Сесія', comment: 'Тимчасовий безпечний DEV-вхід для первинного налаштування співробітників.' });
   }
 
   function logoutEmployee() {
     if (activeUser) {
-      setActionLogs((current) => [{ id: uid('LOG'), date: today, user: activeUser.name, role: activeUser.role, action: 'Вихід із системи', entity: 'Сесія', comment: 'Сесію завершено користувачем.' }, ...current]);
+      prependActionLog({ id: uid('LOG'), date: today, user: activeUser.name, role: activeUser.role, action: 'Вихід із системи', entity: 'Сесія', comment: 'Сесію завершено користувачем.' });
     }
     setAdminPreviewRole('Адміністратор');
     setSessionUserId('');
@@ -5284,12 +5311,16 @@ useEffect(() => {
     setMovements((current) => [{ id: uid('MOV'), date: today, actor: movement.actor ?? activeUser.name, ...movement }, ...current]);
   }
 
+  function prependActionLog(entry: ActionLog) {
+    setActionLogs((current) => limitActionLogs([entry, ...current]));
+  }
+
   function logAction(action: string, entity: string, comment: string) {
-    setActionLogs((current) => [{ id: uid('LOG'), date: today, user: activeUser.name, role: activeUser.role, action, entity, comment }, ...current]);
+    prependActionLog({ id: uid('LOG'), date: today, user: activeUser.name, role: activeUser.role, action, entity, comment });
   }
 
   function logSystemAction(action: string, entity: string, comment: string) {
-    setActionLogs((current) => [{ id: uid('LOG'), date: today, user: SYSTEM_USER.name, role: SYSTEM_USER.role, action, entity, comment }, ...current]);
+    prependActionLog({ id: uid('LOG'), date: today, user: SYSTEM_USER.name, role: SYSTEM_USER.role, action, entity, comment });
   }
 
   function logRiskConfirmation(order: ServiceOrder, action: string, risks: string[]) {
@@ -5369,7 +5400,7 @@ useEffect(() => {
     saveMovementsToStorage(payload.movements);
     saveTaxInvoicesToStorage(payload.taxInvoices ?? []);
     saveCashShiftToStorage(payload.cashShift);
-    const restoredAudit = [
+    const restoredAudit = limitActionLogs([
       {
         id: uid('LOG'),
         date: today,
@@ -5380,7 +5411,7 @@ useEffect(() => {
         comment: `Відновлено копію від ${snapshot.createdAt}.`,
       },
       ...payload.actionLogs,
-    ];
+    ]);
     saveActionLogsToStorage(restoredAudit);
     setUsers(payload.users);
     setCustomerList(payload.clients);
@@ -8767,7 +8798,7 @@ useEffect(() => {
     const nextEngineer = engineers[(currentIndex + 1) % engineers.length] ?? engineers[0];
     if (!nextEngineer) return;
     setOrders((current) => current.map((item) => (item.id === order.id ? { ...item, engineer: nextEngineer.name, engineerAcceptedAt: undefined } : item)));
-    setActionLogs((current) => [{ id: uid('LOG'), date: today, user: activeUser.name, role: activeUser.role, action: 'Зміна інженера', entity: order.id, comment: `${order.engineer} -> ${nextEngineer.name}` }, ...current]);
+    prependActionLog({ id: uid('LOG'), date: today, user: activeUser.name, role: activeUser.role, action: 'Зміна інженера', entity: order.id, comment: `${order.engineer} -> ${nextEngineer.name}` });
     setNotice(`${order.id}: інженера змінено на ${nextEngineer.name}.`);
   }
 
@@ -9585,7 +9616,7 @@ useEffect(() => {
               onClick={() => {
                 setActiveUserId(sessionUser.id);
                 setPage('dashboard');
-                setActionLogs((current) => [{ id: uid('LOG'), date: today, user: sessionUser.name, role: sessionUser.role, action: 'Повернення до керівника', entity: 'Робочий стіл', comment: 'Керівник повернувся зі службового перегляду ролі.' }, ...current]);
+                prependActionLog({ id: uid('LOG'), date: today, user: sessionUser.name, role: sessionUser.role, action: 'Повернення до керівника', entity: 'Робочий стіл', comment: 'Керівник повернувся зі службового перегляду ролі.' });
               }}
             >
               До керівника
@@ -9599,7 +9630,7 @@ useEffect(() => {
                 const nextUser = users.find((user) => user.id === event.target.value) ?? sessionUser;
                 setActiveUserId(nextUser.id);
                 setPage(defaultPageForUser(nextUser));
-                setActionLogs((current) => [{ id: uid('LOG'), date: today, user: sessionUser.name, role: sessionUser.role, action: 'Контроль ролі', entity: 'Робочий стіл', comment: `Керівник відкрив робочий стіл ролі ${nextUser.role}: ${nextUser.name}.` }, ...current]);
+                prependActionLog({ id: uid('LOG'), date: today, user: sessionUser.name, role: sessionUser.role, action: 'Контроль ролі', entity: 'Робочий стіл', comment: `Керівник відкрив робочий стіл ролі ${nextUser.role}: ${nextUser.name}.` });
               }}
               aria-label="Перемикання ролі для контролю керівником"
             >
