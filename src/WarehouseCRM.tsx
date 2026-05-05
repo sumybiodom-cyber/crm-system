@@ -76,13 +76,16 @@ type PurchasePriority = 'Низький' | 'Середній' | 'Високий'
 type ProductBatch = {
   id: string;
   productId: string;
+  productName?: string;
   qtyTotal: number;
   qtyAvailable: number;
   purchasePrice: number;
+  salePrice?: number;
   purchaseDate: string;
   source: string;
   supplier?: string;
   documentNo?: string;
+  shelfLocation?: string;
   comment?: string;
 };
 
@@ -413,6 +416,7 @@ type StockMovement = {
   purchaseId?: string;
   actor?: string;
   basis?: string;
+  batchAllocations?: BatchAllocation[];
   batchRefs?: string;
   unitPrice?: number;
   totalAmount?: number;
@@ -2885,11 +2889,31 @@ function normalizeStoredProduct(product: Product): Product {
   const normalizedSku = normalizeWarehouseText(product.sku ?? '');
   const primaryBarcode = normalizeBarcodeValue(product.barcode || product.sku || '');
   const extraBarcodes = normalizeBarcodeList(...(product.extraBarcodes ?? []), primaryBarcode).filter((item) => item !== primaryBarcode);
-  const batches = Array.isArray(product.batches) ? product.batches.map((batch) => ({
-    ...batch,
-    supplier: batch.supplier ?? batch.source,
-    documentNo: batch.documentNo ?? '',
-  })) : [];
+  const sourceBatches = Array.isArray(product.batches) ? product.batches : [];
+  const batches = sourceBatches.length > 0
+    ? sourceBatches.map((batch) => ({
+        ...batch,
+        productName: batch.productName ?? normalizedName ?? product.name ?? product.sku,
+        supplier: batch.supplier ?? batch.source,
+        salePrice: batch.salePrice ?? product.price ?? 0,
+        documentNo: batch.documentNo ?? '',
+        shelfLocation: batch.shelfLocation ?? product.storageLocation ?? '',
+      }))
+    : (Number(product.stock) > 0 ? [{
+        id: uid('BAT-INIT'),
+        productId: product.id,
+        productName: normalizedName ?? product.name ?? product.sku,
+        qtyTotal: Number(product.stock) || 0,
+        qtyAvailable: Number(product.stock) || 0,
+        purchasePrice: Number(product.cost) || 0,
+        salePrice: Number(product.price) || 0,
+        purchaseDate: today,
+        source: 'Початковий залишок',
+        supplier: 'Початковий залишок',
+        documentNo: 'INIT',
+        shelfLocation: product.storageLocation ?? '',
+        comment: 'Початковий залишок перенесено в стартову партію.',
+      }] : []);
   return {
     ...product,
     sku: normalizedSku || product.id,
@@ -5978,6 +6002,7 @@ useEffect(() => {
       qty: requestedQty,
       orderId,
       basis: orderId,
+      batchAllocations: fifo.allocations,
       batchRefs: fifo.allocations.map((item) => `${item.batchId} x${item.qty}`).join(', '),
       unitPrice: requestedQty > 0 ? Math.round(fifo.totalCost / requestedQty) : 0,
       totalAmount: fifo.totalCost,
@@ -6030,6 +6055,7 @@ useEffect(() => {
       qty: targetPart.qty,
       orderId,
       basis: orderId,
+      batchAllocations: targetPart.batchAllocations,
       batchRefs: targetPart.batchAllocations?.map((item) => `${item.batchId} x${item.qty}`).join(', '),
       unitPrice: targetPart.cost,
       totalAmount: targetPart.cost * targetPart.qty,
@@ -7975,13 +8001,16 @@ useEffect(() => {
           {
             id: batchId,
             productId: existingProductId,
+            productName: product.name,
             qtyTotal: qty,
             qtyAvailable: qty,
             purchasePrice,
+            salePrice,
             purchaseDate: today,
             source: supplier,
             supplier,
             documentNo: purchaseDocumentNo,
+            shelfLocation: storageLocation || product.storageLocation,
             comment: input.appendBarcodeToProductId ? `Додано штрих-код ${normalizedBarcode || 'без коду'} і нову партію.` : 'Прямий прихід на склад.',
           },
         ],
@@ -8013,13 +8042,16 @@ useEffect(() => {
           {
             id: batchId,
             productId: createdProductId,
+            productName: name,
             qtyTotal: qty,
             qtyAvailable: qty,
             purchasePrice,
+            salePrice,
             purchaseDate: today,
             source: supplier,
             supplier,
             documentNo: purchaseDocumentNo,
+            shelfLocation: storageLocation,
             comment: 'Нова позиція створена автоматично при приході.',
           },
         ],
@@ -8053,6 +8085,7 @@ useEffect(() => {
       qty,
       purchaseId,
       basis: purchaseDocumentNo,
+      batchAllocations: [{ batchId, qty, unitCost: purchasePrice, purchaseDate: today }],
       batchRefs: batchId,
       unitPrice: purchasePrice,
       totalAmount: qty * purchasePrice,
@@ -9491,6 +9524,7 @@ useEffect(() => {
         productId: part.productId,
         qty: part.qty,
         orderId: order.id,
+        batchAllocations: part.batchAllocations,
         batchRefs: part.batchAllocations?.map((item) => `${item.batchId} x${item.qty}`).join(', '),
         unitPrice: part.cost,
         totalAmount: part.cost * part.qty,
@@ -9509,6 +9543,7 @@ useEffect(() => {
         productId: part.productId,
         qty: part.qty,
         orderId: order.id,
+        batchAllocations: part.batchAllocations,
         batchRefs: part.batchAllocations?.map((item) => `${item.batchId} x${item.qty}`).join(', '),
         unitPrice: part.cost,
         totalAmount: part.cost * part.qty,
@@ -16392,19 +16427,25 @@ function PartsPage({ products, requirements, receipts, movements, productName, s
                         <strong>Партії FIFO</strong>
                         <div className="table stock-detail-table">
                           <div className="table-row table-head">
-                            <span>Партія</span>
                             <span>Дата</span>
-                            <span>Залишок</span>
-                            <span>Ціна</span>
                             <span>Постачальник</span>
+                            <span>Залишок</span>
+                            <span>Закупка</span>
+                            <span>Продаж</span>
+                            <span>Комірка</span>
+                            <span>Документ</span>
+                            <span>Партія</span>
                           </div>
                           {product.batches.length > 0 ? product.batches.map((batch) => (
                             <div key={batch.id} className="table-row">
-                              <span>{batch.id}</span>
                               <span>{batch.purchaseDate}</span>
+                              <span>{batch.supplier || batch.source || '—'}</span>
                               <span>{batch.qtyAvailable}/{batch.qtyTotal}</span>
                               <span>{showCost ? money(batch.purchasePrice) : 'Приховано'}</span>
-                              <span>{batch.supplier || batch.source || '—'}</span>
+                              <span>{money(batch.salePrice ?? product.price ?? 0)}</span>
+                              <span>{batch.shelfLocation || product.storageLocation || '—'}</span>
+                              <span>{batch.documentNo || '—'}</span>
+                              <span>{batch.id}</span>
                             </div>
                           )) : <div className="empty-state">Партій немає.</div>}
                         </div>
@@ -17725,8 +17766,8 @@ function MovementsPage({ movements, productName }: { movements: StockMovement[];
               <span>{stockMovementTypeLabel(movement)}</span>
               <span>{productName(movement.productId)}</span>
               <span>{movement.qty}</span>
-              <span>{movement.batchRefs ?? '—'}</span>
-              <span>{typeof movement.unitPrice === 'number' ? money(movement.unitPrice) : '—'}</span>
+              <span>{movement.batchAllocations?.map((item) => item.batchId).join(', ') || movement.batchRefs || '—'}</span>
+              <span>{movement.batchAllocations?.length ? movement.batchAllocations.map((item) => `${money(item.unitCost)}`).join(', ') : typeof movement.unitPrice === 'number' ? money(movement.unitPrice) : '—'}</span>
               <span>{movement.orderId ?? movement.purchaseId}</span>
               <span>{movement.basis ?? '—'}</span>
               <span>{movement.actor ?? '—'}</span>
