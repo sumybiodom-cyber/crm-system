@@ -275,6 +275,7 @@ type ServiceOrder = {
   groupId?: string;
   assignedTo?: string;
   createdByUserId?: string;
+  createdAt?: string;
   qrUrl: string;
   client: string;
   phone: string;
@@ -6019,6 +6020,7 @@ useEffect(() => {
       manager: orderAuthor.name,
       legalEntity: Boolean(selectedContract),
       status: 'Прийнято',
+      createdAt: today,
       statusChangedAt: today,
       intakeDate: today,
       promisedDate: 'Уточнюється',
@@ -12487,11 +12489,8 @@ function OrdersPage(props: {
       return matchesOrderSearch(order, needle);
     })
     .filter((order) => managerFilterMatch(order))
-    .sort((a, b) => {
-      const scoreDiff = managerOrderPriorityScore(b) - managerOrderPriorityScore(a);
-      if (scoreDiff !== 0) return scoreDiff;
-      return (parseDateTime(b.intakeDate)?.getTime() ?? 0) - (parseDateTime(a.intakeDate)?.getTime() ?? 0);
-    });
+    .sort((a, b) => (parseDateTime(b.createdAt ?? b.intakeDate)?.getTime() ?? 0)
+      - (parseDateTime(a.createdAt ?? a.intakeDate)?.getTime() ?? 0));
   const activeManagerOrder = managerVisibleOrders.find((order) => order.id === managerActiveOrderId) ?? managerVisibleOrders[0];
   const managerAlerts = {
     unpaid: managerSourceOrders.filter((order) => {
