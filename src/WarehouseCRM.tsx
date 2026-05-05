@@ -2421,21 +2421,6 @@ const SYSTEM_USER: User = {
   session: 'Активна',
 };
 
-function buildTemporaryAutoAdmin(): User {
-  return {
-    id: 'auto-admin',
-    name: 'Тимчасовий адміністратор',
-    role: 'Адміністратор',
-    twoFactor: false,
-    login: 'auto.admin',
-    phone: undefined,
-    email: 'auto-admin@local.crm',
-    authMode: 'phone_code',
-    permissions: defaultPermissionsForRole('Адміністратор'),
-    session: 'Активна',
-  };
-}
-
 const companyBankAccounts: BankAccountRecord[] = [
   { id: 'BANK-RAIF-1', bankName: 'Райффайзен', iban: 'UA123808050000000002600000001', currency: 'UAH', legalType: 'ТОВ' },
   { id: 'BANK-PRIVAT-1', bankName: 'ПриватБанк', iban: 'UA213052990000026005000000002', currency: 'UAH', legalType: 'ФОП' },
@@ -4374,10 +4359,6 @@ function EmployeeLoginScreen({
   challenge,
   error,
   hint,
-  smsMode,
-  devMode,
-  devRoleHint,
-  onDevAdminLogin,
   onPhoneChange,
   onCodeChange,
   onRequestCode,
@@ -4389,10 +4370,6 @@ function EmployeeLoginScreen({
   challenge: LoginChallenge | null;
   error: string;
   hint: string;
-  smsMode: 'DEV' | 'PROD';
-  devMode: boolean;
-  devRoleHint: string;
-  onDevAdminLogin: () => void;
   onPhoneChange: (value: string) => void;
   onCodeChange: (value: string) => void;
   onRequestCode: () => void;
@@ -4427,7 +4404,6 @@ function EmployeeLoginScreen({
               <div style={{ fontSize: '13px', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#0f766e' }}>СПЕКТР-АС CRM</div>
               <div style={{ fontSize: '14px', color: '#64748b', marginTop: '4px' }}>Вхід співробітника</div>
             </div>
-            {devMode && <div className="tag tag-amber" style={{ display: 'inline-flex' }}>DEV MODE</div>}
           </div>
           <div>
             <h1 style={{ margin: 0, fontSize: '34px', lineHeight: 1.05 }}>Телефон + одноразовий код</h1>
@@ -4441,19 +4417,17 @@ function EmployeeLoginScreen({
             <label>
               Телефон
               <input value={phone} onChange={(event) => onPhoneChange(event.target.value)} placeholder="+380..." style={{ marginTop: '8px' }} />
-              {devMode && <small>{devRoleHint}</small>}
             </label>
             <div className="action-row" style={{ marginTop: '18px' }}>
               <button type="button" className="submit-button" onClick={onRequestCode} style={{ minWidth: '170px' }}>Отримати код</button>
-              {devMode && <button type="button" onClick={onDevAdminLogin}>Увійти як адміністратор (DEV)</button>}
             </div>
           </>
         ) : (
           <>
             <label>
-              Код із SMS
+              Введіть код
               <input value={code} onChange={(event) => onCodeChange(event.target.value)} placeholder="4-6 цифр" style={{ marginTop: '8px' }} />
-              <small>{smsMode === 'DEV' ? `Код надіслано на ${challenge.phone}. У DEV він також показується нижче.` : `Код надіслано на ${challenge.phone}.`}</small>
+              <small>Тестовий код для входу: 1111. Телефон: {challenge.phone}.</small>
             </label>
             <div className="action-row" style={{ marginTop: '18px' }}>
               <button type="button" className="submit-button" onClick={onVerifyCode} style={{ minWidth: '170px' }}>Увійти</button>
@@ -4469,14 +4443,6 @@ function EmployeeLoginScreen({
 }
 
 export function WarehouseCRM() {
-  const envMode = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env?.MODE ?? 'development';
-  const isDevelopmentEnv = envMode === 'development' || Boolean((import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env?.DEV);
-  const showCodeOnScreen = isDevelopmentEnv;
-  const devAdminPhone = normalizePhone((import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env?.VITE_DEV_ADMIN_PHONE ?? '');
-  const smsMode = (((import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env?.VITE_SMS_MODE ?? 'DEV').toUpperCase() === 'PROD' ? 'PROD' : 'DEV') as 'DEV' | 'PROD';
-  const turboSmsEndpoint = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env?.VITE_TURBOSMS_ENDPOINT ?? 'https://api.turbosms.ua/message/send.json';
-  const turboSmsSender = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env?.VITE_TURBOSMS_SENDER ?? 'CRM';
-  const turboSmsToken = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env?.VITE_TURBOSMS_TOKEN ?? '';
   const loginCodeLifetimeMs = Number((import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env?.VITE_LOGIN_CODE_TTL_MS ?? 180000);
   const [page, setPage] = useState<Page>(() => {
   return (localStorage.getItem('page') as Page) || 'dashboard';
@@ -4562,17 +4528,12 @@ useEffect(() => {
   const [loginError, setLoginError] = useState('');
   const [loginHint, setLoginHint] = useState('');
   const [loginChallenge, setLoginChallenge] = useState<LoginChallenge | null>(null);
-  const [smsSendWindow, setSmsSendWindow] = useState<Record<string, number[]>>({});
   const [adminPreviewRole, setAdminPreviewRole] = useState<Role>('Адміністратор');
   const [adminPreviewUserId, setAdminPreviewUserId] = useState('');
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
-  const devRoleHint = !isDevelopmentEnv
-    ? ''
-    : 'У DEV можна тимчасово зайти кнопкою нижче як адміністратор для первинного налаштування.';
 
   const sessionUserRecord = users.find((user) => user.id === sessionUserId) ?? null;
   const activeUserRecord = users.find((user) => user.id === activeUserId) ?? sessionUserRecord;
-  const autoLoginUser = users.find((user) => user.role === 'Адміністратор') ?? users[0] ?? buildTemporaryAutoAdmin();
   const hookSafeUser = activeUserRecord ?? sessionUserRecord ?? SYSTEM_USER;
   const filteredOrders = (() => {
     const needle = query.trim();
@@ -4669,24 +4630,22 @@ useEffect(() => {
   }, [query]);
 
   useEffect(() => {
-    if (users.length === 0) {
-      const fallbackAdmin = buildTemporaryAutoAdmin();
-      setUsers([fallbackAdmin]);
-      saveEmployeesToStorage([fallbackAdmin]);
-      if (!sessionUserRecord) setSessionUserId(fallbackAdmin.id);
-      if (!activeUserRecord) setActiveUserId(fallbackAdmin.id);
+    if (sessionUserId && !sessionUserRecord) {
+      setSessionUserId('');
+      setActiveUserId('');
+      setLoginChallenge(null);
+      setLoginCode('');
+      setLoginHint('');
+      setLoginError('Сесію не знайдено. Увійдіть повторно.');
       return;
     }
-    if (!sessionUserRecord) {
-      setSessionUserId(autoLoginUser.id);
+    if (sessionUserRecord && !activeUserRecord) {
+      setActiveUserId(sessionUserRecord.id);
     }
-    if (!activeUserRecord) {
-      setActiveUserId(sessionUserRecord?.id ?? autoLoginUser.id);
-    }
-  }, [users, sessionUserRecord, activeUserRecord, autoLoginUser]);
+  }, [users, sessionUserId, sessionUserRecord, activeUserRecord]);
 
   useEffect(() => {
-    if (activeUserRecord?.role !== 'Адміністратор') {
+    if (!activeUserRecord || !['Адміністратор', 'Руководитель'].includes(activeUserRecord.role)) {
       if (adminPreviewRole !== 'Адміністратор') setAdminPreviewRole('Адміністратор');
       if (adminPreviewUserId) setAdminPreviewUserId('');
     }
@@ -5022,38 +4981,16 @@ useEffect(() => {
     return incoming - closedActsAmount;
   }
 
-  async function sendLoginSms(phone: string, code: string) {
-    if (smsMode === 'DEV') return;
-    if (!turboSmsToken) throw new Error('Не задано VITE_TURBOSMS_TOKEN для PROD режиму.');
-    const response = await fetch(turboSmsEndpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${turboSmsToken}`,
-      },
-      body: JSON.stringify({
-        recipients: [phone],
-        sms: {
-          sender: turboSmsSender,
-          text: `Ваш код входа: ${code}`,
-        },
-      }),
-    });
-    if (!response.ok) {
-      throw new Error(`TurboSMS повернув помилку ${response.status}.`);
-    }
-  }
-
-  async function requestPhoneCode() {
+  function requestPhoneCode() {
     const normalized = normalizePhone(loginPhone);
-    let user = users.find((item) => normalizePhone(item.phone ?? '') === normalized);
+    const user = users.find((item) => normalizePhone(item.phone ?? '') === normalized);
     if (!normalized) {
       setLoginError('Вкажіть телефон співробітника.');
       setLoginHint('');
       return;
     }
     if (!user) {
-      setLoginError('Телефон не знайдено у базі співробітників.');
+      setLoginError('Телефон не найден в базе сотрудников');
       setLoginHint('');
       return;
     }
@@ -5063,26 +5000,12 @@ useEffect(() => {
       return;
     }
     const nowTs = Date.now();
-    const recentSms = (smsSendWindow[normalized] ?? []).filter((timestamp) => nowTs - timestamp < 60000);
-    if (recentSms.length >= 3) {
-      setLoginError('Забагато SMS на цей номер. Спробуйте через хвилину.');
-      setLoginHint('');
-      return;
-    }
-    const code = String(Math.floor(1000 + Math.random() * 9000));
-    try {
-      await sendLoginSms(user.phone ?? loginPhone, code);
-      setSmsSendWindow((current) => ({ ...current, [normalized]: [...recentSms, nowTs] }));
-      setLoginChallenge({ userId: user.id, code, phone: user.phone ?? loginPhone, expiresAt: nowTs + loginCodeLifetimeMs, attempts: 0 });
-      setLoginCode('');
-      setLoginError('');
-      setLoginHint(showCodeOnScreen ? `Демо SMS: код для ${user.name} — ${code}` : '');
-      if (showCodeOnScreen) setNotice(`SMS-код для ${user.name}: ${code}`);
-      prependActionLog({ id: uid('LOG'), date: today, user: user.name, role: user.role, action: 'Запит коду входу', entity: 'Авторизація', comment: `Надіслано одноразовий код на ${user.phone ?? 'телефон співробітника'}.` });
-    } catch (error) {
-      setLoginError(error instanceof Error ? error.message : 'Не вдалося надіслати SMS-код.');
-      setLoginHint('');
-    }
+    const code = '1111';
+    setLoginChallenge({ userId: user.id, code, phone: user.phone ?? loginPhone, expiresAt: nowTs + loginCodeLifetimeMs, attempts: 0 });
+    setLoginCode('');
+    setLoginError('');
+    setLoginHint(`Тестовий код для ${user.name}: ${code}`);
+    prependActionLog({ id: uid('LOG'), date: today, user: user.name, role: user.role, action: 'Запит коду входу', entity: 'Авторизація', comment: 'Створено тестовий одноразовий код 1111 без SMS-інтеграції.' });
   }
 
   function verifyPhoneCode() {
@@ -5137,39 +5060,6 @@ useEffect(() => {
     setLoginHint('');
   }
 
-  function loginAsDevAdmin() {
-    if (!isDevelopmentEnv) return;
-    const existingDevAdmin = users.find((user) => user.login === 'dev.admin');
-    const devAdmin = existingDevAdmin ?? {
-      id: uid('dev-admin'),
-      name: 'DEV Адміністратор',
-      role: 'Адміністратор' as Role,
-      twoFactor: false,
-      login: 'dev.admin',
-      phone: undefined,
-      email: 'dev-admin@local.crm',
-      authMode: 'phone_code' as AuthMode,
-      permissions: defaultPermissionsForRole('Адміністратор'),
-      session: 'Активна' as const,
-    };
-    if (!existingDevAdmin) {
-      setUsers((current) => {
-        const updatedUsers = [devAdmin, ...current];
-        saveEmployeesToStorage(updatedUsers);
-        return updatedUsers;
-      });
-    }
-    setSessionUserId(devAdmin.id);
-    setActiveUserId(devAdmin.id);
-    setShowMenu(false);
-    setLoginChallenge(null);
-    setLoginCode('');
-    setLoginPhone('');
-    setLoginError('');
-    setLoginHint('');
-    prependActionLog({ id: uid('LOG'), date: today, user: devAdmin.name, role: devAdmin.role, action: 'DEV вхід', entity: 'Сесія', comment: 'Тимчасовий безпечний DEV-вхід для первинного налаштування співробітників.' });
-  }
-
   function logoutEmployee() {
     if (activeUser) {
       prependActionLog({ id: uid('LOG'), date: today, user: activeUser.name, role: activeUser.role, action: 'Вихід із системи', entity: 'Сесія', comment: 'Сесію завершено користувачем.' });
@@ -5185,19 +5075,19 @@ useEffect(() => {
     setLoginHint('');
   }
 
-  const sessionUser = sessionUserRecord ?? autoLoginUser;
-  const activeUser = activeUserRecord ?? sessionUser;
-  const isAdminPreviewAvailable = activeUser.role === 'Адміністратор';
+  const sessionUser = sessionUserRecord;
+  const activeUser = activeUserRecord ?? sessionUserRecord ?? hookSafeUser;
+  const isAdminPreviewAvailable = ['Адміністратор', 'Руководитель'].includes(activeUser.role);
   const currentRole = adminPreviewRole;
   const previewUsers = users.filter((user) => user.role === currentRole);
   const selectedPreviewUser = previewUsers.find((user) => user.id === adminPreviewUserId) ?? null;
-  const currentUser = selectedPreviewUser ?? (currentRole === 'Адміністратор' ? activeUser : null);
+  const currentUser = selectedPreviewUser ?? (currentRole === activeUser.role ? activeUser : null);
   const viewUser = isAdminPreviewAvailable
     ? (currentUser ? normalizeUserRecord(currentUser) : buildPreviewUser(currentRole, activeUser))
     : activeUser;
 
-  const canSwitchUsers = sessionUser.role === 'Руководитель' && sessionUser.session === 'Активна';
-  const isOwnerControlView = sessionUser.role === 'Руководитель' && activeUser.id !== sessionUser.id;
+  const canSwitchUsers = sessionUser?.role === 'Руководитель' && sessionUser.session === 'Активна';
+  const isOwnerControlView = sessionUser?.role === 'Руководитель' && activeUser.id !== sessionUser.id;
   const canViewPage = (targetPage: Page) => canRoleViewPage(viewUser, targetPage);
   const canDo = (permission: Permission) => roleFinePermissions[viewUser.role].includes(permission) || hasPermissionOverride(viewUser, permission);
   const visibleNavItems = navItems.filter((item) => canViewPage(item.id));
@@ -9512,6 +9402,22 @@ useEffect(() => {
   }
 
   const managerStatusOptions: OrderStatus[] = ['Готовий до видачі', 'Очікує оплати', 'Очікує клієнта', 'Не підлягає ремонту'];
+  if (!sessionUserRecord) {
+    return (
+      <EmployeeLoginScreen
+        phone={loginPhone}
+        code={loginCode}
+        challenge={loginChallenge}
+        error={loginError}
+        hint={loginHint}
+        onPhoneChange={setLoginPhone}
+        onCodeChange={setLoginCode}
+        onRequestCode={requestPhoneCode}
+        onVerifyCode={verifyPhoneCode}
+        onBack={resetPhoneLogin}
+      />
+    );
+  }
   return (
     <div className="app-shell">
       <main className="workspace">
@@ -9649,7 +9555,7 @@ useEffect(() => {
                   }}
                   aria-label="Вибір співробітника для перегляду"
                 >
-                  <option value="">{currentRole === 'Адміністратор' ? activeUser.name : 'Оберіть співробітника'}</option>
+                  <option value="">{currentRole === activeUser.role ? activeUser.name : 'Оберіть співробітника'}</option>
                   {previewUsers.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
                 </select>
               </label>
