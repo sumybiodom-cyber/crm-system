@@ -5976,6 +5976,7 @@ useEffect(() => {
   }
 
   function createQuickOrder() {
+    const orderAuthor = viewUser;
     const engineer = users.find((user) => user.id === quickEngineerId && user.role === 'Інженер');
     const selectedContract = contracts.find((contract) => contract.id === quickContractId);
     const normalizedPhone = quickPhone.trim();
@@ -6012,9 +6013,9 @@ useEffect(() => {
       estimatedAmount: Number.isFinite(estimatedAmount) && estimatedAmount > 0 ? estimatedAmount : undefined,
       contractId: selectedContract?.id,
       assignedTo: engineer?.id,
-      createdByUserId: activeUser.id,
+      createdByUserId: orderAuthor.id,
       engineer: engineer?.name ?? '',
-      manager: activeUser.name,
+      manager: orderAuthor.name,
       legalEntity: Boolean(selectedContract),
       status: 'Прийнято',
       statusChangedAt: today,
@@ -6034,7 +6035,7 @@ useEffect(() => {
       pendingExtraApproval: false,
       currentVersion: 1,
       statusHistory: [
-        { id: uid('H'), newStatus: 'Прийнято', changedBy: activeUser.name, changedAt: today, comment: `Замовлення створено менеджером ${activeUser.name}${suggestedRepairLocation ? `, комірка ${suggestedRepairLocation}` : ''}.` },
+        { id: uid('H'), newStatus: 'Прийнято', changedBy: orderAuthor.name, changedAt: today, comment: `Замовлення створено менеджером ${orderAuthor.name}${suggestedRepairLocation ? `, комірка ${suggestedRepairLocation}` : ''}.` },
       ],
       activityLog: [
         { id: uid('ACT'), date: today, action: 'Створено замовлення', detail: `${fallbackClientName} · ${quickDevice.trim()}` },
@@ -6063,7 +6064,7 @@ useEffect(() => {
           orderId,
           fromLocation: undefined,
           toLocation: suggestedRepairLocation,
-          userId: activeUser.id,
+          userId: orderAuthor.id,
           timestamp: today,
         },
         ...current,
@@ -6075,7 +6076,7 @@ useEffect(() => {
         orderId,
         versionNo: 1,
         createdAt: today,
-        createdBy: activeUser.name,
+        createdBy: orderAuthor.name,
         reason: 'Початкове створення замовлення',
         snapshotData: JSON.stringify(order),
       },
@@ -6092,7 +6093,7 @@ useEffect(() => {
         entityId: orderId,
         clientOrSupplier: order.client,
         createdAt: today,
-        createdBy: activeUser.name,
+        createdBy: orderAuthor.name,
         version: 1,
         status: 'PDF збережено',
         pdfPath: `/documents/service_order/${orderId}/${number}.pdf`,
@@ -9544,6 +9545,7 @@ useEffect(() => {
                     const nextRole = event.target.value as Role;
                     setAdminPreviewRole(nextRole);
                     setAdminPreviewUserId('');
+                    if (nextRole === 'Менеджер') setPage('orders');
                   }}
                   aria-label="Режим перегляду CRM за роллю"
                 >
@@ -12471,6 +12473,33 @@ function OrdersPage(props: {
         return;
       }
       props.createQuickOrder();
+      setManagerFilter('all');
+      setManagerSearch('');
+      setShowManagerCreateForm(false);
+    };
+
+    const resetManagerCreateDraft = () => {
+      props.setQuickClientName('');
+      props.setQuickPhone('');
+      props.setQuickDevice('');
+      props.setQuickSerial('');
+      props.setQuickProblem('');
+      props.setQuickAppearance('');
+      props.setQuickEstimatedAmount('');
+      props.setQuickEngineerId('');
+      props.setQuickContractId('');
+      props.setQuickLocationCode('');
+      props.setQuickComment('');
+      setManagerSearch('');
+    };
+
+    const openManagerCreateMode = () => {
+      resetManagerCreateDraft();
+      setShowManagerCreateForm(true);
+    };
+
+    const cancelManagerCreateMode = () => {
+      resetManagerCreateDraft();
       setShowManagerCreateForm(false);
     };
 
@@ -12992,24 +13021,24 @@ function OrdersPage(props: {
                 <Search size={16} />
               </button>
             </div>
-            <button type="button" className="submit-button" onClick={() => {
-              setShowManagerCreateForm((current) => !current);
-            }}>
+            <button type="button" className="submit-button" onClick={openManagerCreateMode}>
               Нове замовлення
             </button>
           </div>
-          <div className="manager-orders-toolbar-filter">
-            <button type="button" className={managerFilter === 'all' ? 'primary' : ''} onClick={() => setManagerFilter('all')}>Усі</button>
-            <button type="button" className={managerFilter === 'Прийнято' ? 'primary' : ''} onClick={() => setManagerFilter('Прийнято')}>Прийнято</button>
-            <button type="button" className={managerFilter === 'В ремонті' ? 'primary' : ''} onClick={() => setManagerFilter('В ремонті')}>В ремонті</button>
-            <button type="button" className={managerFilter === 'Готово' ? 'primary' : ''} onClick={() => setManagerFilter('Готово')}>Готово</button>
-            <button type="button" className={managerFilter === 'Видано' ? 'primary' : ''} onClick={() => setManagerFilter('Видано')}>Видано</button>
-            <button type="button" className={managerFilter === 'Борг' ? 'primary' : ''} onClick={() => setManagerFilter('Борг')}>Борг</button>
-            <button type="button" className={managerFilter === 'Очікує оплату' ? 'primary' : ''} onClick={() => setManagerFilter('Очікує оплату')}>Очікує оплату</button>
-          </div>
+          {!showManagerCreateForm && (
+            <div className="manager-orders-toolbar-filter">
+              <button type="button" className={managerFilter === 'all' ? 'primary' : ''} onClick={() => setManagerFilter('all')}>Усі</button>
+              <button type="button" className={managerFilter === 'Прийнято' ? 'primary' : ''} onClick={() => setManagerFilter('Прийнято')}>Прийнято</button>
+              <button type="button" className={managerFilter === 'В ремонті' ? 'primary' : ''} onClick={() => setManagerFilter('В ремонті')}>В ремонті</button>
+              <button type="button" className={managerFilter === 'Готово' ? 'primary' : ''} onClick={() => setManagerFilter('Готово')}>Готово</button>
+              <button type="button" className={managerFilter === 'Видано' ? 'primary' : ''} onClick={() => setManagerFilter('Видано')}>Видано</button>
+              <button type="button" className={managerFilter === 'Борг' ? 'primary' : ''} onClick={() => setManagerFilter('Борг')}>Борг</button>
+              <button type="button" className={managerFilter === 'Очікує оплату' ? 'primary' : ''} onClick={() => setManagerFilter('Очікує оплату')}>Очікує оплату</button>
+            </div>
+          )}
         </section>
 
-        {managerSearch.trim() && (
+        {!showManagerCreateForm && managerSearch.trim() && (
           <section className="panel manager-orders-search-assist">
             <div className="panel-heading">
               <h2>Результати пошуку</h2>
@@ -13099,7 +13128,7 @@ function OrdersPage(props: {
           </section>
         )}
 
-        {managerPostPaymentOrder && (
+        {!showManagerCreateForm && managerPostPaymentOrder && (
           <section className="panel manager-orders-documents-assist">
             <div className="panel-heading">
               <h2>Оплату підтверджено</h2>
@@ -13163,21 +13192,23 @@ function OrdersPage(props: {
           </section>
         )}
 
-        <section className="manager-orders-signals">
-          {managerAlerts.debt > 0 && <span className="manager-order-hint manager-order-hint-danger">Борг: {managerAlerts.debt}</span>}
-          {managerAlerts.unpaid > 0 && <span className="manager-order-hint manager-order-hint-warning">Не оплачено: {managerAlerts.unpaid}</span>}
-          {managerAlerts.readyWaiting > 0 && <span className="manager-order-hint manager-order-hint-danger">Готово, не видано: {managerAlerts.readyWaiting}</span>}
-          {managerAlerts.noEngineer > 0 && <span className="manager-order-hint manager-order-hint-warning">Без інженера: {managerAlerts.noEngineer}</span>}
-          {managerAlerts.debt === 0 && managerAlerts.unpaid === 0 && managerAlerts.readyWaiting === 0 && managerAlerts.noEngineer === 0 && (
-            <span className="manager-order-hint manager-order-hint-neutral">Все під контролем</span>
-          )}
-        </section>
+        {!showManagerCreateForm && (
+          <section className="manager-orders-signals">
+            {managerAlerts.debt > 0 && <span className="manager-order-hint manager-order-hint-danger">Борг: {managerAlerts.debt}</span>}
+            {managerAlerts.unpaid > 0 && <span className="manager-order-hint manager-order-hint-warning">Не оплачено: {managerAlerts.unpaid}</span>}
+            {managerAlerts.readyWaiting > 0 && <span className="manager-order-hint manager-order-hint-danger">Готово, не видано: {managerAlerts.readyWaiting}</span>}
+            {managerAlerts.noEngineer > 0 && <span className="manager-order-hint manager-order-hint-warning">Без інженера: {managerAlerts.noEngineer}</span>}
+            {managerAlerts.debt === 0 && managerAlerts.unpaid === 0 && managerAlerts.readyWaiting === 0 && managerAlerts.noEngineer === 0 && (
+              <span className="manager-order-hint manager-order-hint-neutral">Все під контролем</span>
+            )}
+          </section>
+        )}
 
         {showManagerCreateForm ? (
           <section className="panel manager-orders-create">
             <div className="panel-heading">
-              <h2>Новий клієнт / нове замовлення</h2>
-              <span>Якщо в пошуку нічого не знайдено, створіть нового клієнта або нове замовлення тут.</span>
+              <h2>Нове замовлення</h2>
+              <span>Заповніть клієнта, телефон, пристрій, проблему та оберіть договір або режим без договору.</span>
             </div>
             <div className="table">
               <label>
@@ -13225,8 +13256,8 @@ function OrdersPage(props: {
               </div>
             )}
             <div className="action-row">
-              <button type="button" className="submit-button" onClick={submitManagerOrder}>Створити замовлення</button>
-              <button type="button" onClick={() => setShowManagerCreateForm(false)}>Скасувати</button>
+              <button type="button" className="submit-button" onClick={submitManagerOrder}>Зберегти замовлення</button>
+              <button type="button" onClick={cancelManagerCreateMode}>Скасувати / Назад до замовлень</button>
             </div>
           </section>
         ) : (
