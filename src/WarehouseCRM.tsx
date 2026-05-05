@@ -274,6 +274,7 @@ type ServiceOrder = {
   id: string;
   groupId?: string;
   assignedTo?: string;
+  createdByUserId?: string;
   qrUrl: string;
   client: string;
   phone: string;
@@ -3991,8 +3992,27 @@ function hasAccess(role: Role, page: Page) {
   return rolePageAccess[role].includes(page);
 }
 
+function hasPermissionBasedPageAccess(user: User, page: Page) {
+  if (user.role === 'Адміністратор') return true;
+  if (['parts', 'purchases', 'storage', 'movements'].includes(page)) return user.permissions.canAccessWarehouse;
+  if (['finance', 'cash', 'documents', 'bank-import', 'tax-invoices'].includes(page)) return user.permissions.canAccessFinance;
+  if (['employee-control', 'team', 'payroll'].includes(page)) return user.permissions.canAccessEmployees;
+  if (page === 'reports') return user.permissions.canAccessReports;
+  if (page === 'settings') return user.permissions.canAccessSettings;
+  return false;
+}
+
 function canRoleViewPage(user: User, targetPage: Page) {
-  return hasAccess(user.role, targetPage);
+  return hasAccess(user.role, targetPage) || hasPermissionBasedPageAccess(user, targetPage);
+}
+
+function hasPermissionOverride(user: User, permission: Permission) {
+  if (user.role === 'Адміністратор') return true;
+  if (permission.startsWith('stock.') || permission.startsWith('purchases.')) return user.permissions.canAccessWarehouse;
+  if (permission.startsWith('finance.')) return user.permissions.canAccessFinance;
+  if (permission.startsWith('reports.')) return user.permissions.canAccessReports;
+  if (permission.startsWith('settings.')) return user.permissions.canAccessSettings;
+  return false;
 }
 
 function getManagerUserId(order: ServiceOrder, users: User[]) {
@@ -4001,6 +4021,15 @@ function getManagerUserId(order: ServiceOrder, users: User[]) {
 
 function getEngineerAssignedUserId(order: ServiceOrder, users: User[]) {
   return order.assignedTo ?? users.find((user) => user.role === 'Інженер' && user.name === order.engineer)?.id ?? '';
+}
+
+function getOrderCreatorName(order: ServiceOrder, users: User[]) {
+  if (!order.createdByUserId) return 'не указано';
+  return users.find((user) => user.id === order.createdByUserId)?.name ?? 'не указано';
+}
+
+function getInternalMessageAuthorRole(message: InternalMessage, users: User[]) {
+  return users.find((user) => user.name === message.createdBy)?.role ?? 'Система';
 }
 
 function navLabelForRole(page: Page, role: Role) {
@@ -4536,6 +4565,7 @@ useEffect(() => {
   const [smsSendWindow, setSmsSendWindow] = useState<Record<string, number[]>>({});
   const [adminPreviewRole, setAdminPreviewRole] = useState<Role>('Адміністратор');
   const [adminPreviewUserId, setAdminPreviewUserId] = useState('');
+  const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const devRoleHint = !isDevelopmentEnv
     ? ''
     : 'У DEV можна тимчасово зайти кнопкою нижче як адміністратор для первинного налаштування.';
@@ -5169,7 +5199,7 @@ useEffect(() => {
   const canSwitchUsers = sessionUser.role === 'Руководитель' && sessionUser.session === 'Активна';
   const isOwnerControlView = sessionUser.role === 'Руководитель' && activeUser.id !== sessionUser.id;
   const canViewPage = (targetPage: Page) => canRoleViewPage(viewUser, targetPage);
-  const canDo = (permission: Permission) => roleFinePermissions[viewUser.role].includes(permission);
+  const canDo = (permission: Permission) => roleFinePermissions[viewUser.role].includes(permission) || hasPermissionOverride(viewUser, permission);
   const visibleNavItems = navItems.filter((item) => canViewPage(item.id));
   const hideGlobalSearch = viewUser.role === 'Менеджер' && (page === 'orders' || page === 'my-orders');
   const repairOrders = filteredOrders;
@@ -6087,6 +6117,7 @@ useEffect(() => {
       estimatedAmount: Number.isFinite(estimatedAmount) && estimatedAmount > 0 ? estimatedAmount : undefined,
       contractId: selectedContract?.id,
       assignedTo: engineer?.id,
+      createdByUserId: activeUser.id,
       engineer: engineer?.name ?? '',
       manager: activeUser.name,
       legalEntity: Boolean(selectedContract),
@@ -9528,12 +9559,65 @@ useEffect(() => {
               )}
             </div>
           )}
-          {visibleInternalMessages.length > 0 && (
-            <button className="icon-button notification-button" aria-label="Центр повідомлень" onClick={() => stayOnCurrentPage()}>
+          <div style={{ position: 'relative' }}>
+            <button
+              className="icon-button notification-button"
+              type="button"
+              aria-label="Центр повідомлень"
+              title="Повідомлення"
+              onClick={() => setIsNotificationsOpen((current) => !current)}
+            >
               <Bell size={19} />
               {unreadInternalMessages > 0 && <span>{unreadInternalMessages}</span>}
             </button>
-          )}
+            {isNotificationsOpen && (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: 'calc(100% + 8px)',
+                  right: 0,
+                  width: '340px',
+                  maxHeight: '360px',
+                  overflowY: 'auto',
+                  background: '#fff',
+                  border: '1px solid #dbe3ef',
+                  borderRadius: '16px',
+                  boxShadow: '0 18px 40px rgba(15, 23, 42, 0.18)',
+                  padding: '12px',
+                  zIndex: 30,
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                  <strong>Повідомлення</strong>
+                  <button type="button" className="icon-button" aria-label="Закрити повідомлення" onClick={() => setIsNotificationsOpen(false)}>
+                    <X size={16} />
+                  </button>
+                </div>
+                {visibleInternalMessages.length > 0 ? (
+                  <div style={{ display: 'grid', gap: '10px' }}>
+                    {visibleInternalMessages.slice(0, 8).map((message) => (
+                      <div key={message.id} style={{ border: '1px solid #e2e8f0', borderRadius: '12px', padding: '10px 12px', display: 'grid', gap: '6px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'start' }}>
+                          <div style={{ display: 'grid', gap: '2px' }}>
+                            <strong>{message.createdBy || 'Система'}</strong>
+                            <span style={{ fontSize: '12px', color: '#64748b' }}>{getInternalMessageAuthorRole(message, users)}</span>
+                          </div>
+                          <span style={{ fontSize: '12px', color: '#64748b', textAlign: 'right' }}>{message.createdAt}</span>
+                        </div>
+                        <div style={{ fontSize: '14px', color: '#0f172a' }}>{message.text}</div>
+                        <div style={{ fontSize: '12px', color: '#64748b' }}>
+                          {message.orderId ? `Замовлення ${message.orderId} · ` : ''}
+                          Строк: {message.dueAt}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="empty-state">Новых уведомлений нет</div>
+                )}
+              </div>
+            )}
+          </div>
           <div className="current-user-badge">
             <strong>{roleDisplay(activeUser.role)} — {activeUser.name}</strong>
             <span>{activeUser.role === 'Руководитель' ? 'режим контроля руководителя' : roleWorkspaceHint(activeUser.role)}</span>
@@ -9549,7 +9633,6 @@ useEffect(() => {
                     const nextRole = event.target.value as Role;
                     setAdminPreviewRole(nextRole);
                     setAdminPreviewUserId('');
-                    stayOnCurrentPage();
                   }}
                   aria-label="Режим перегляду CRM за роллю"
                 >
@@ -9563,7 +9646,6 @@ useEffect(() => {
                   value={adminPreviewUserId}
                   onChange={(event) => {
                     setAdminPreviewUserId(event.target.value);
-                    stayOnCurrentPage();
                   }}
                   aria-label="Вибір співробітника для перегляду"
                 >
@@ -9571,10 +9653,6 @@ useEffect(() => {
                   {previewUsers.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
                 </select>
               </label>
-              <div className="current-user-badge">
-                <strong>Перегляд як: {adminPreviewRoleLabel(currentRole)}</strong>
-                <span>{currentUser ? currentUser.name : 'Користувача не вибрано'}</span>
-              </div>
             </>
           )}
           {isOwnerControlView && (
@@ -9598,14 +9676,13 @@ useEffect(() => {
                 const nextUser = users.find((user) => user.id === event.target.value) ?? sessionUser;
                 setActiveUserId(nextUser.id);
                 prependActionLog({ id: uid('LOG'), date: today, user: sessionUser.name, role: sessionUser.role, action: 'Контроль ролі', entity: 'Робочий стіл', comment: `Керівник відкрив робочий стіл ролі ${nextUser.role}: ${nextUser.name}.` });
-                stayOnCurrentPage();
               }}
               aria-label="Перемикання ролі для контролю керівником"
             >
               {users.map((user) => <option key={user.id} value={user.id}>{user.name} · {user.role}</option>)}
             </select>
           )}
-          <button className="icon-button" type="button" onClick={logoutEmployee} aria-label="Вийти">
+          <button className="icon-button" style={{ marginLeft: 'auto' }} type="button" onClick={logoutEmployee} aria-label="Вийти" title="Вийти">
             <LogOut size={18} />
           </button>
         </header>
@@ -13872,7 +13949,8 @@ function OrdersPage(props: {
              <div key={order.id} className={`order-card ${props.selectedOrderId === order.id ? 'order-card-active' : ''}`} style={order.returnedToCellAt ? { borderColor: '#16a34a', boxShadow: '0 0 0 2px rgba(22, 163, 74, 0.18)' } : undefined}>
                <div className="order-title"><strong>{order.id}</strong><span className={statusClass[order.status]}>{statusDisplay(order.status)}</span></div>
                <h3>{order.device}</h3>
-                <p>{order.client} · {order.issue}</p>
+               <p>{order.client} · {order.issue}</p>
+               <p>Менеджер: {getOrderCreatorName(order, props.users)}</p>
                {order.returnedToCellAt && <p style={{ color: '#166534', fontWeight: 700 }}>Готово до видачі: в комірці {order.locationCode}</p>}
                <div className="order-meta-row">
                  <span>{simpleRepairPaymentStatus(order)}</span>
@@ -13921,7 +13999,7 @@ function OrdersPage(props: {
         <>
           <section className="panel manager-orders-stage">
             <div className="panel-heading"><h2>{primaryListTitle}</h2><span>{primaryOrders.length} · {primaryListHint}</span></div>
-            <OrderSummaryList orders={primaryOrders} selectedId={props.selectedOrderId} onSelect={props.setSelectedOrderId} showPriority />
+            <OrderSummaryList orders={primaryOrders} selectedId={props.selectedOrderId} onSelect={props.setSelectedOrderId} showPriority users={props.users} />
           </section>
           <OrderDetail {...props} />
         </>
@@ -13929,7 +14007,7 @@ function OrdersPage(props: {
         <section className="content-split orders-layout">
           <div className="panel">
             <div className="panel-heading"><h2>{primaryListTitle}</h2><span>{primaryOrders.length} · {primaryListHint}</span></div>
-            <OrderSummaryList orders={primaryOrders} selectedId={props.selectedOrderId} onSelect={props.setSelectedOrderId} showPriority={isEngineer || isSupervisor} />
+            <OrderSummaryList orders={primaryOrders} selectedId={props.selectedOrderId} onSelect={props.setSelectedOrderId} showPriority={isEngineer || isSupervisor} users={props.users} />
           </div>
           <OrderDetail {...props} />
         </section>
@@ -13992,7 +14070,7 @@ function MyOrdersPage({ orders, activeUser, acceptOrderWork, changeOrderStatus, 
   );
 }
 
-function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations, orderMovementLogs, moveOrder, products, selectedProductId, setSelectedProductId, qty, setQty, addPartToRepair, orderPart, reserveArrived, issueToEngineer, markInstalled, returnServicePart, addOrderPayment, changeOrderStatus, acceptOrderWork, returnOrderToCellReady, reassignEngineer, closeOrder, issueReadyOrder, oneClickManagerIssue, transferOrderToBas, printDocument, createServiceOrderDocument, printServiceOrderDocument, documents, taxInvoices, notifications, allNotifications, sendClientNotification, createNotificationDraft, approval, sendRepairApproval, recordApprovalResponse, markApprovalNoAnswer, logRiskConfirmation, ensureOrderDocumentRecord, logOrderDocumentPrint, signOrderAct, createTaxInvoiceForOrder, registerTaxInvoice, markEngineerWorkCompleted, cancelOrder, refundOrder, cancelOrderAct, reopenOrder, orderVersions, suggestedDocumentAction, clearSuggestedDocumentAction, dashboardFocus, clearDashboardFocus, notifyUser, canDo, showCost, activeUser }: {
+function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations, orderMovementLogs, moveOrder, products, selectedProductId, setSelectedProductId, qty, setQty, addPartToRepair, orderPart, reserveArrived, issueToEngineer, markInstalled, returnServicePart, addOrderPayment, changeOrderStatus, acceptOrderWork, returnOrderToCellReady, reassignEngineer, closeOrder, issueReadyOrder, oneClickManagerIssue, transferOrderToBas, printDocument, createServiceOrderDocument, printServiceOrderDocument, documents, taxInvoices, notifications, allNotifications, sendClientNotification, createNotificationDraft, approval, sendRepairApproval, recordApprovalResponse, markApprovalNoAnswer, logRiskConfirmation, ensureOrderDocumentRecord, logOrderDocumentPrint, signOrderAct, createTaxInvoiceForOrder, registerTaxInvoice, markEngineerWorkCompleted, cancelOrder, refundOrder, cancelOrderAct, reopenOrder, orderVersions, suggestedDocumentAction, clearSuggestedDocumentAction, dashboardFocus, clearDashboardFocus, notifyUser, canDo, showCost, activeUser, users }: {
   selectedOrder: ServiceOrder;
   allOrders: ServiceOrder[];
   orderUnits: OrderUnit[];
@@ -14052,6 +14130,7 @@ function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations,
   canDo: (permission: Permission) => boolean;
   showCost: boolean;
   activeUser: User;
+  users: User[];
 }) {
   const totals = orderTotals(selectedOrder);
   const simplePaymentStatus = simpleRepairPaymentStatus(selectedOrder);
@@ -14133,6 +14212,7 @@ function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations,
   const activeDocumentSuggestion = suggestedDocumentAction?.orderId === selectedOrder.id ? suggestedDocumentAction : null;
   const activeDashboardFocus = dashboardFocus?.orderId === selectedOrder.id ? dashboardFocus : null;
   const displayedOrderAmount = totals.total > 0 ? money(totals.total) : selectedOrder.estimatedAmount ? `${money(selectedOrder.estimatedAmount)} · орієнтовно` : 'Не визначено';
+  const orderCreatorName = getOrderCreatorName(selectedOrder, users);
   const canCompleteRepair = selectedOrder.works.length > 0 && totals.works > 0 && Boolean(selectedOrder.engineerAcceptedAt);
   const managerCanAcceptIntoWork = canShowManagerView && selectedOrder.status === 'Прийнято';
   const managerCanMarkReadyForIssue = canShowManagerView
@@ -14676,6 +14756,7 @@ function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations,
         {canShowManagerView && <Info label="К выдаче" value={canIssueOrder ? 'Можно выдать' : 'Ещё не готово'} />}
         {canShowManagerView && <Info label="Локація" value={selectedOrder.locationCode ?? 'Не призначено'} />}
         {canShowManagerView && <Info label="Інженер" value={selectedOrder.engineer} />}
+        {canShowManagerView && <Info label="Створив / прийняв" value={orderCreatorName} />}
         {canShowManagerView && <Info label="Дата прийому" value={selectedOrder.intakeDate} />}
         {canShowManagerView && <Info label="Вік замовлення" value={`${totalAge} дн.`} />}
         {canShowManagerView && <Info label="Терміновість" value={selectedOrder.urgent ? 'ТЕРМІНОВО' : 'Звичайний пріоритет'} />}
@@ -14737,6 +14818,7 @@ function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations,
                 <Info label="Комплектація" value={selectedOrder.appearance ?? 'Не вказано'} />
                 <Info label="Коментар" value={selectedOrder.intakeComment ?? 'Без коментаря'} />
                 <Info label="Інженер" value={selectedOrder.engineer} />
+                <Info label="Створив / прийняв" value={orderCreatorName} />
                 <Info label="Дата прийому" value={selectedOrder.intakeDate} />
                 <Info label="Вік замовлення" value={`${totalAge} дн.`} />
                 <Info label="Сума" value={displayedOrderAmount} />
@@ -18343,7 +18425,7 @@ function orderPriority(order: ServiceOrder) {
   return 'Звичайний';
 }
 
-function OrderSummaryList({ orders, selectedId, onSelect, showPriority = false }: { orders: ServiceOrder[]; selectedId?: string; onSelect?: (id: string) => void; showPriority?: boolean }) {
+function OrderSummaryList({ orders, selectedId, onSelect, showPriority = false, users = [] }: { orders: ServiceOrder[]; selectedId?: string; onSelect?: (id: string) => void; showPriority?: boolean; users?: User[] }) {
   return (
     <div className="order-list">
       {orders.map((order) => (
@@ -18354,6 +18436,7 @@ function OrderSummaryList({ orders, selectedId, onSelect, showPriority = false }
               <small>Етап: {statusStage(order.status)}</small>
               <h3>{order.device}</h3>
               <p>{order.client} · {order.issue}</p>
+              <p>Менеджер: {getOrderCreatorName(order, users)}</p>
             </div>
             <div className="order-price"><strong>{showPriority ? orderPriority(order) : order.parts.length}</strong><span>{showPriority ? 'пріоритет' : 'запчастин'}</span></div>
           </div>
