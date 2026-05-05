@@ -12429,6 +12429,13 @@ function OrdersPage(props: {
   const isEngineer = props.activeUser.role === 'Інженер';
   const isManager = props.activeUser.role === 'Менеджер';
   const isSupervisor = props.activeUser.role === 'Руководитель';
+  const deviceIcon = (device: string) => {
+    const value = device.toLowerCase();
+    if (value.includes('printer') || value.includes('laserjet') || value.includes('принтер') || value.includes('мфу')) return '🖨';
+    if (value.includes('ноут') || value.includes('laptop') || value.includes('thinkpad') || value.includes('macbook')) return '💻';
+    if (value.includes('телефон') || value.includes('iphone') || value.includes('samsung') || value.includes('смартф')) return '📱';
+    return '🧾';
+  };
   const [managerSearch, setManagerSearch] = useState('');
   const [managerFilter, setManagerFilter] = useState<'all' | 'Прийнято' | 'В ремонті' | 'Готово' | 'Видано' | 'Борг' | 'Очікує оплату'>('all');
   const [showManagerCreateForm, setShowManagerCreateForm] = useState(false);
@@ -13389,14 +13396,6 @@ function OrdersPage(props: {
               <h2>{props.allRoleOrders ? 'Мої замовлення' : 'Всі замовлення'}</h2>
               <span>{managerVisibleOrders.length}</span>
             </div>
-            <div className="manager-orders-table-head">
-              <span>🧾 Замовлення</span>
-              <span>🖨 Пристрій</span>
-              <span>🔧 Статус</span>
-              <span>💰 Сума</span>
-              <span>❗ Борг</span>
-              <span>📅 Дата</span>
-            </div>
             <div className="manager-orders-list-body">
               {managerVisibleOrders.map((order) => {
                 const debtSnapshot = orderDebtSnapshot(order);
@@ -13410,14 +13409,19 @@ function OrdersPage(props: {
                     className={`manager-order-list-row manager-order-compact-row${managerActiveOrderId === order.id && isManagerOrderDetailOpen ? ' is-active' : ''}${actionMeta.signal === 'danger' ? ' is-problem' : actionMeta.signal === 'warning' ? ' is-warning' : actionMeta.signal === 'success' ? ' is-success' : ''}`}
                     onClick={() => openManagerOrderDetails(order.id)}
                   >
-                    <span className="manager-order-cell manager-order-cell-id">{order.id}</span>
-                    <span className="manager-order-cell">{order.device}</span>
-                    <span className="manager-order-cell">
+                    <span className="manager-order-cell manager-order-cell-id">
+                      <span className="manager-order-id-badge">{order.id}</span>
+                    </span>
+                    <span className="manager-order-cell manager-order-cell-device">
+                      <span className="manager-order-device-icon" aria-hidden="true">{deviceIcon(order.device)}</span>
+                      <span className="manager-order-device-text">{order.device}</span>
+                    </span>
+                    <span className="manager-order-cell manager-order-cell-status">
                       <span className={`manager-order-status-badge ${simpleRepairStatusClass(simpleRepairStatus(order.status))}`}>{strictStatusLabel}</span>
                     </span>
-                    <span className="manager-order-cell">{money(debtSnapshot.total)}</span>
-                    <span className={`manager-order-cell ${remainingForBadge > 0 ? 'manager-order-cell-debt' : ''}`}>{remainingForBadge > 0 ? money(remainingForBadge) : '—'}</span>
-                    <span className="manager-order-cell">{order.intakeDate}</span>
+                    <span className="manager-order-cell manager-order-cell-money">{money(debtSnapshot.total)}</span>
+                    <span className={`manager-order-cell manager-order-cell-money ${remainingForBadge > 0 ? 'manager-order-cell-debt' : ''}`}>{remainingForBadge > 0 ? `● ${money(remainingForBadge)}` : '—'}</span>
+                    <span className="manager-order-cell manager-order-cell-date">{order.intakeDate}</span>
                   </button>
                 );
               })}

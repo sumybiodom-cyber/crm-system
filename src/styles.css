@@ -1267,17 +1267,6 @@ button {
   width: 100%;
 }
 
-.manager-orders-table-head {
-  display: grid;
-  grid-template-columns: 1.1fr 1.3fr 0.9fr 0.8fr 0.8fr 0.8fr;
-  gap: 12px;
-  padding: 0 10px 10px;
-  color: #6b7280;
-  font-size: 12px;
-  font-weight: 700;
-  border-bottom: 1px solid #e5e7eb;
-}
-
 .manager-orders-list-body {
   display: grid;
   gap: 8px;
@@ -1324,24 +1313,24 @@ button {
   grid-template-columns: minmax(0, 1fr) 150px;
   gap: 12px;
   width: 100%;
-  padding: 10px;
+  padding: 10px 12px;
   border: 1px solid #e5e7eb;
-  border-left: 5px solid #e5e7eb;
-  border-radius: 12px;
+  border-left: 4px solid #e5e7eb;
+  border-radius: 10px;
   background: #ffffff;
-  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.04);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
   text-align: left;
-  transition: all 0.18s ease;
+  transition: all 0.15s ease;
 }
 
 .manager-order-list-row:hover {
-  background: #f9fafb;
+  background: #f5f7fa;
+  cursor: pointer;
 }
 
 .manager-order-compact-row {
   grid-template-columns: 1.1fr 1.3fr 0.9fr 0.8fr 0.8fr 0.8fr;
   align-items: center;
-  padding: 10px 12px;
 }
 
 .manager-order-cell {
@@ -1358,8 +1347,47 @@ button {
   font-weight: 700;
 }
 
+.manager-order-id-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: #f3f4f6;
+  color: #111111;
+  font-weight: 700;
+}
+
+.manager-order-cell-device {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.manager-order-device-icon {
+  flex: 0 0 auto;
+  font-size: 17px;
+  line-height: 1;
+}
+
+.manager-order-device-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.manager-order-cell-status {
+  justify-self: start;
+}
+
+.manager-order-cell-money,
+.manager-order-cell-date {
+  text-align: right;
+  justify-self: end;
+}
+
 .manager-order-cell-debt {
-  color: #dc2626;
+  color: #e53935;
   font-weight: 700;
 }
 
@@ -1371,6 +1399,7 @@ button {
 .manager-order-list-row.is-problem {
   border-color: #fca5a5;
   border-left-color: #dc2626;
+  background: #fff5f5;
 }
 
 .manager-order-list-row.is-warning {
@@ -1589,9 +1618,9 @@ button {
 
 .manager-order-status-badge {
   padding: 4px 8px;
-  border-radius: 8px;
+  border-radius: 6px;
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 500;
   line-height: 1;
 }
 
