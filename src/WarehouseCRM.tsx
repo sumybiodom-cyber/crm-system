@@ -13326,11 +13326,6 @@ function OrdersPage(props: {
             )}
           </section>
         )}
-        {!showManagerCreateForm && (
-          <button type="button" className="submit-button manager-floating-create" onClick={openManagerCreateMode}>
-            ➕ Нове замовлення
-          </button>
-        )}
 
         {showManagerCreateForm ? (
           <section className="panel manager-orders-create">
