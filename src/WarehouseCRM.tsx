@@ -12469,6 +12469,7 @@ function OrdersPage(props: {
   const [managerIssueModal, setManagerIssueModal] = useState<null | { orderId: string }>(null);
   const [managerPostPaymentOrderId, setManagerPostPaymentOrderId] = useState('');
   const [managerExceptionDraft, setManagerExceptionDraft] = useState<{ orderId: string; mode: 'cancel' | 'reopen' | 'refund' | 'part-return'; reason: string; comment: string; amount: string; partId?: string } | null>(null);
+  const managerPaymentAmountInputRef = useRef<HTMLInputElement | null>(null);
   const roleOrders = props.allRoleOrders ?? props.orders;
   const managerSourceOrders = props.allRoleOrders ?? props.allOrders;
   const managerEngineers = props.users.filter((user) => user.role === 'Інженер');
@@ -12583,6 +12584,28 @@ function OrdersPage(props: {
     window.addEventListener('keydown', handleManagerHotkeys);
     return () => window.removeEventListener('keydown', handleManagerHotkeys);
   }, [activeManagerOrder, addingPartOrderId, isManager, managerVisibleOrders, props, showManagerCreateForm]);
+
+  useEffect(() => {
+    if (!isManager) return;
+    if (!managerPaymentModal && !managerIssueModal) return;
+    const handleModalEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      if (managerPaymentModal) {
+        setManagerPaymentModal(null);
+        return;
+      }
+      if (managerIssueModal) {
+        setManagerIssueModal(null);
+      }
+    };
+    window.addEventListener('keydown', handleModalEscape);
+    return () => window.removeEventListener('keydown', handleModalEscape);
+  }, [isManager, managerIssueModal, managerPaymentModal]);
+
+  useEffect(() => {
+    if (!managerPaymentModal) return;
+    window.setTimeout(() => managerPaymentAmountInputRef.current?.focus(), 0);
+  }, [managerPaymentModal]);
 
   if (isManager) {
     // Manager order card contract:
@@ -13868,6 +13891,7 @@ function OrdersPage(props: {
                 <label className="manager-payment-field">
                   <span>Сума оплати</span>
                   <input
+                    ref={managerPaymentAmountInputRef}
                     type="number"
                     min={0}
                     max={managerPaymentModal.due}
@@ -13898,8 +13922,8 @@ function OrdersPage(props: {
           <div className="manager-payment-modal-backdrop" onClick={() => setManagerIssueModal(null)}>
             <section className="manager-payment-modal manager-issue-modal" onClick={(event) => event.stopPropagation()}>
               <div className="panel-heading">
-                <h2>Підтвердити видачу</h2>
-                <span>Завершення замовлення</span>
+                <h2>Підтвердити видачу замовлення?</h2>
+                <span>Підтвердження дії</span>
               </div>
               <div className="manager-payment-modal-body">
                 <p className="manager-issue-modal-text">Видати замовлення {managerIssueModal.orderId} клієнту?</p>
