@@ -13682,9 +13682,14 @@ function OrdersPage(props: {
                         <span className="manager-order-metric-label">Борг</span>
                         <span className={`manager-order-cell manager-order-cell-money ${remainingForBadge > 0 ? 'manager-order-cell-debt manager-order-debt-badge' : ''}`}>{remainingForBadge > 0 ? `● ${money(remainingForBadge)}` : '—'}</span>
                       </span>
-                      <span className="manager-order-metric">
+                      <span className="manager-order-metric manager-order-metric-profit" title={`Оплачено ${money(profitSnapshot.totalPaid)} - Запчастини ${money(profitSnapshot.partsCost)} - Інженер ${money(profitSnapshot.engineerSalary)} = Прибуток ${money(profitSnapshot.profit)}`}>
                         <span className="manager-order-metric-label">Прибуток</span>
-                        <span className={`manager-order-cell manager-order-cell-money manager-order-profit-badge ${profitSnapshot.profit > 0 ? 'is-positive' : profitSnapshot.profit < 0 ? 'is-negative' : 'is-neutral'}`}>{money(profitSnapshot.profit)}</span>
+                        <span className="manager-order-profit-breakdown">
+                          <span className="manager-order-profit-line manager-order-profit-income">{money(profitSnapshot.totalPaid)} <small>оплата</small></span>
+                          <span className="manager-order-profit-line manager-order-profit-expense">- {money(profitSnapshot.partsCost)} <small>запчастини</small></span>
+                          <span className="manager-order-profit-line manager-order-profit-expense">- {money(profitSnapshot.engineerSalary)} <small>інженер</small></span>
+                          <span className={`manager-order-profit-badge ${profitSnapshot.profit > 0 ? 'is-positive' : profitSnapshot.profit < 0 ? 'is-negative' : 'is-neutral'}`}>= {money(profitSnapshot.profit)}</span>
+                        </span>
                       </span>
                       <span className="manager-order-metric manager-order-metric-date">
                         <span className="manager-order-metric-label">Дата</span>

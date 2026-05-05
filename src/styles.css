@@ -1442,7 +1442,7 @@ button {
 
 .manager-order-secondary {
   display: grid;
-  grid-template-columns: auto repeat(3, minmax(72px, auto)) auto;
+  grid-template-columns: auto minmax(72px, auto) minmax(72px, auto) minmax(180px, auto) auto;
   gap: 14px;
   align-items: center;
   justify-content: end;
@@ -1464,6 +1464,39 @@ button {
   border-radius: 8px;
   font-weight: 700;
   white-space: nowrap;
+}
+
+.manager-order-metric-profit {
+  min-width: 180px;
+}
+
+.manager-order-profit-breakdown {
+  display: grid;
+  gap: 4px;
+  justify-items: start;
+}
+
+.manager-order-profit-line {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.manager-order-profit-line small {
+  font-size: 11px;
+  font-weight: 500;
+  color: #6b7280;
+}
+
+.manager-order-profit-income {
+  color: #0f172a;
+}
+
+.manager-order-profit-expense {
+  color: #7f1d1d;
 }
 
 .manager-order-profit-badge.is-positive {
