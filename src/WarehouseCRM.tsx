@@ -4196,15 +4196,15 @@ function simpleRepairStatus(status: OrderStatus): 'Прийнято' | 'В ре�
 
 function strictManagerWorkflowStatus(order: ServiceOrder) {
   const remaining = clientOrderDebt(order);
-  if (order.status === 'Скасовано') return 'Отменён';
-  if (order.status === 'Закрито') return 'Закрыт';
-  if (order.status === 'Видано') return remaining > 0 ? 'Выдан с долгом' : 'Выдан';
-  if (order.status === 'Готовий до видачі') return 'Готов к выдаче';
-  if (order.status === 'Очікує оплати') return 'Ожидает оплаты';
-  if (order.engineerWorkCompletedAt || order.returnedToCellAt) return 'Готов';
-  if (order.engineerAcceptedAt || ['На діагностиці', 'В ремонті', 'На тестуванні', 'Очікує запчастину'].includes(order.status)) return 'В работе';
-  if (order.engineer) return 'Назначен инженер';
-  return 'Новый';
+  if (order.status === 'Скасовано') return 'Скасовано';
+  if (order.status === 'Закрито') return 'Закрито';
+  if (order.status === 'Видано') return remaining > 0 ? 'Видано з боргом' : 'Видано';
+  if (order.status === 'Готовий до видачі') return 'Готово до видачі';
+  if (order.status === 'Очікує оплати') return 'Очікує оплату';
+  if (order.engineerWorkCompletedAt || order.returnedToCellAt) return 'Готово до видачі';
+  if (order.engineerAcceptedAt || ['На діагностиці', 'В ремонті', 'На тестуванні', 'Очікує запчастину'].includes(order.status)) return 'В роботі';
+  if (order.engineer) return 'Інженер призначений';
+  return 'Прийнято';
 }
 
 function simpleRepairStatusClass(status: ReturnType<typeof simpleRepairStatus>) {
@@ -12451,6 +12451,7 @@ function OrdersPage(props: {
   const [managerPulseOrderId, setManagerPulseOrderId] = useState('');
   const [managerPaymentDrafts, setManagerPaymentDrafts] = useState<Record<string, { amount: string; type: SimpleLedgerPaymentKind; method: 'наличные' | 'карта' | 'перевод'; reason: string }>>({});
   const [managerPaymentModal, setManagerPaymentModal] = useState<null | { orderId: string; amount: string; due: number; method: 'наличные' | 'карта' | 'перевод' }>(null);
+  const [managerIssueModal, setManagerIssueModal] = useState<null | { orderId: string }>(null);
   const [managerPostPaymentOrderId, setManagerPostPaymentOrderId] = useState('');
   const [managerExceptionDraft, setManagerExceptionDraft] = useState<{ orderId: string; mode: 'cancel' | 'reopen' | 'refund' | 'part-return'; reason: string; comment: string; amount: string; partId?: string } | null>(null);
   const roleOrders = props.allRoleOrders ?? props.orders;
@@ -12578,9 +12579,6 @@ function OrdersPage(props: {
     // "Can a manager understand in 2 seconds whether the order can be released?"
     // If not, the change should be rejected.
     const runManagerStatusAction = (orderId: string, nextStatus: 'В ремонті' | 'Готово' | 'Видано') => {
-      if ((nextStatus === 'Готово' || nextStatus === 'Видано') && !window.confirm(`Підтвердити дію "${nextStatus}" для замовлення ${orderId}?`)) {
-        return;
-      }
       props.updateSimpleManagerOrderStatus(orderId, nextStatus);
     };
 
@@ -12731,6 +12729,17 @@ function OrdersPage(props: {
       }
     };
 
+    const openManagerIssueModal = (orderId: string) => {
+      setManagerIssueModal({ orderId });
+    };
+
+    const confirmManagerIssueModal = () => {
+      if (!managerIssueModal) return;
+      runManagerStatusAction(managerIssueModal.orderId, 'Видано');
+      pulseManagerOrder(managerIssueModal.orderId);
+      setManagerIssueModal(null);
+    };
+
     const managerSearchResults = managerVisibleOrders;
     const managerSearchExactOrder = findExactOrderMatch(managerSourceOrders, managerSearch);
     const managerSearchMatchedClient = managerSearchExactOrder ? null : findClientBySearch(props.customerList, managerSearch);
@@ -12839,7 +12848,7 @@ function OrdersPage(props: {
           signal: 'success' as const,
           signalLabel: 'Можна видати',
           actionLabel: 'Видати',
-          action: () => runManagerStatusAction(order.id, 'Видано'),
+          action: () => openManagerIssueModal(order.id),
           reason: '',
         };
       }
@@ -13080,7 +13089,7 @@ function OrdersPage(props: {
       if (issueGuard.canIssue) {
         return {
           label: 'Видати',
-          run: () => runManagerStatusAction(order.id, 'Видано'),
+          run: () => openManagerIssueModal(order.id),
         };
       }
       return {
@@ -13450,7 +13459,7 @@ function OrdersPage(props: {
                               className="manager-order-inline-action manager-order-inline-action-issue"
                               onClick={(event) => {
                                 event.stopPropagation();
-                                runManagerStatusAction(order.id, 'Видано');
+                                openManagerIssueModal(order.id);
                               }}
                             >
                               Видати
@@ -13500,7 +13509,7 @@ function OrdersPage(props: {
               const canTakePayment = !linkedContract && order.status !== 'Видано' && remainingAmount > 0 && ['Готовий до видачі', 'Очікує оплати'].includes(order.status);
               const canAccountToContract = Boolean(linkedContract) && !order.contractAccountedAt && ['Готовий до видачі', 'Очікує оплати'].includes(order.status);
               const canCancelOrder = !['Скасовано', 'Видано', 'Закрито'].includes(order.status);
-              const canReturnToWork = ['Готовий до видачі', 'Очікує оплати'].includes(order.status) || strictStatusLabel === 'Готов';
+              const canReturnToWork = ['Готовий до видачі', 'Очікує оплати'].includes(order.status) || strictStatusLabel === 'Готово до видачі';
               const canRefundMoney = paidAmount > 0;
               const can_release = canRelease(order, actState.status);
               const issuedWithDebt = order.status === 'Видано' && remainingAmount > 0;
@@ -13535,7 +13544,7 @@ function OrdersPage(props: {
                                 : (props.ensureOrderDocumentRecord('Акт надання послуг', order), props.logOrderDocumentPrint(order, 'Акт надання послуг'), props.printDocument('Акт надання послуг', 'service_order', order.id, order.client)),
                             }
                           : can_release
-                            ? { label: 'Видати', run: () => runManagerStatusAction(order.id, 'Видано') }
+                            ? { label: 'Видати', run: () => openManagerIssueModal(order.id) }
                             : primaryAction === 'Перейти до ремонту'
                               ? { label: 'Перейти до ремонту', run: () => setManagerActiveOrderId(order.id) }
                               : null;
@@ -13836,13 +13845,13 @@ function OrdersPage(props: {
                 <h2>Оплата замовлення {managerPaymentModal.orderId}</h2>
                 <span>Каса / термінал / безготівка</span>
               </div>
-              <div className="table">
-                <label>
-                  Сума до оплати
+              <div className="manager-payment-modal-body">
+                <label className="manager-payment-field">
+                  <span>Сума до оплати</span>
                   <input value={money(managerPaymentModal.due)} readOnly />
                 </label>
-                <label>
-                  Сума оплати
+                <label className="manager-payment-field">
+                  <span>Сума оплати</span>
                   <input
                     type="number"
                     min={0}
@@ -13851,8 +13860,8 @@ function OrdersPage(props: {
                     onChange={(event) => setManagerPaymentModal((current) => current ? { ...current, amount: event.target.value } : current)}
                   />
                 </label>
-                <label>
-                  Спосіб оплати
+                <label className="manager-payment-field">
+                  <span>Спосіб оплати</span>
                   <select
                     value={managerPaymentModal.method}
                     onChange={(event) => setManagerPaymentModal((current) => current ? { ...current, method: event.target.value as 'наличные' | 'карта' | 'перевод' } : current)}
@@ -13863,9 +13872,26 @@ function OrdersPage(props: {
                   </select>
                 </label>
               </div>
-              <div className="action-row">
+              <div className="action-row manager-payment-actions">
                 <button type="button" className="submit-button" onClick={confirmManagerPaymentModal}>Підтвердити</button>
                 <button type="button" onClick={() => setManagerPaymentModal(null)}>Скасувати</button>
+              </div>
+            </section>
+          </div>
+        )}
+        {managerIssueModal && (
+          <div className="manager-payment-modal-backdrop" onClick={() => setManagerIssueModal(null)}>
+            <section className="manager-payment-modal manager-issue-modal" onClick={(event) => event.stopPropagation()}>
+              <div className="panel-heading">
+                <h2>Підтвердити видачу</h2>
+                <span>Завершення замовлення</span>
+              </div>
+              <div className="manager-payment-modal-body">
+                <p className="manager-issue-modal-text">Видати замовлення {managerIssueModal.orderId} клієнту?</p>
+              </div>
+              <div className="action-row manager-payment-actions">
+                <button type="button" className="submit-button manager-issue-confirm-button" onClick={confirmManagerIssueModal}>Видати</button>
+                <button type="button" onClick={() => setManagerIssueModal(null)}>Скасувати</button>
               </div>
             </section>
           </div>
