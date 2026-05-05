@@ -9434,7 +9434,7 @@ useEffect(() => {
           <div className="brand workspace-brand">
             <div className="brand-mark">СА</div>
             <div>
-              <strong>СПЕКТР-АС</strong>
+              <strong>СПЕКТР-АС CRM</strong>
               <span>{roleDisplay(activeUser.role)}</span>
             </div>
           </div>
@@ -9531,7 +9531,7 @@ useEffect(() => {
             )}
           </div>
           <div className="current-user-badge">
-            <strong>{roleDisplay(activeUser.role)} — {activeUser.name}</strong>
+            <strong>👤 {activeUser.name}</strong>
             <span>{activeUser.role === 'Руководитель' ? 'режим контроля руководителя' : roleWorkspaceHint(activeUser.role)}</span>
           </div>
           {isAdminPreviewAvailable && (
@@ -13022,7 +13022,7 @@ function OrdersPage(props: {
               </button>
             </div>
             <button type="button" className="submit-button" onClick={openManagerCreateMode}>
-              Нове замовлення
+              ➕ Нове замовлення
             </button>
           </div>
           {!showManagerCreateForm && (

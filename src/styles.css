@@ -1,7 +1,19 @@
 :root {
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  color: #18342c;
-  background: #eef4f2;
+  --crm-bg: #f5f7fa;
+  --crm-card: #ffffff;
+  --crm-border: #e5e7eb;
+  --crm-text: #1f2937;
+  --crm-muted: #6b7280;
+  --crm-primary: #2563eb;
+  --crm-primary-hover: #1d4ed8;
+  --crm-hover: #e0e7ff;
+  --crm-success: #10b981;
+  --crm-danger: #ef4444;
+  --crm-warning: #f59e0b;
+  --crm-dark: #374151;
+  font-family: Inter, Arial, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--crm-text);
+  background: var(--crm-bg);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
@@ -14,6 +26,8 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
+  background: var(--crm-bg);
+  color: var(--crm-text);
 }
 
 button,
@@ -30,6 +44,7 @@ button {
 .app-shell {
   display: block;
   min-height: 100vh;
+  background: var(--crm-bg);
 }
 
 .sidebar {
@@ -47,9 +62,9 @@ button {
   place-items: center;
   width: 46px;
   height: 46px;
-  border-radius: 8px;
+  border-radius: 12px;
   color: #fff;
-  background: #18342c;
+  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
   font-weight: 900;
 }
 
@@ -60,7 +75,7 @@ button {
 
 .brand span {
   margin-top: 2px;
-  color: #6d827b;
+  color: var(--crm-muted);
   font-size: 13px;
 }
 
@@ -76,17 +91,18 @@ button {
   min-height: 44px;
   padding: 0 12px;
   border: 1px solid transparent;
-  border-radius: 8px;
-  color: #506961;
+  border-radius: 10px;
+  color: var(--crm-muted);
   background: transparent;
   text-align: left;
+  transition: all 0.18s ease;
 }
 
 .nav-item-active,
 .nav-item:hover {
-  color: #18342c;
-  border-color: #c9ded6;
-  background: #edf7f3;
+  color: var(--crm-primary);
+  border-color: #c7d2fe;
+  background: var(--crm-hover);
 }
 
 .support-card {
@@ -133,7 +149,7 @@ button {
 
 .workspace {
   min-width: 0;
-  padding: 18px 24px 40px;
+  padding: 16px 24px 40px;
 }
 
 .topbar {
@@ -143,8 +159,12 @@ button {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 8px 0 12px;
-  background: #eef4f2;
+  min-height: 56px;
+  padding: 8px 0;
+  margin-bottom: 16px;
+  background: rgba(255, 255, 255, 0.96);
+  border-bottom: 1px solid var(--crm-border);
+  backdrop-filter: blur(10px);
 }
 
 .workspace-brand {
@@ -158,16 +178,24 @@ button {
   align-items: center;
   margin: 0 0 16px;
   padding: 0 0 12px;
-  border-bottom: 1px solid #d4e0dc;
+  border-bottom: 1px solid var(--crm-border);
 }
 
 .workspace-nav .nav-item {
   flex: 0 0 auto;
   min-height: 38px;
   padding: 0 12px;
-  border-color: #dbe5e1;
-  border-radius: 999px;
-  background: #ffffff;
+  border-color: transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--crm-muted);
+}
+
+.workspace-nav .nav-item.nav-item-active,
+.workspace-nav .nav-item:hover {
+  background: var(--crm-hover);
+  color: var(--crm-primary);
+  border-color: transparent;
 }
 
 .toast-stack {
@@ -233,16 +261,16 @@ button {
   gap: 10px;
   min-height: 46px;
   padding: 0 14px;
-  border: 1px solid #cfddd8;
-  border-radius: 8px;
-  background: #fff;
+  border: 1px solid var(--crm-border);
+  border-radius: 12px;
+  background: var(--crm-card);
 }
 
 .search-box input {
   width: 100%;
   border: 0;
   outline: 0;
-  color: #18342c;
+  color: var(--crm-text);
 }
 
 .search-dropdown {
@@ -297,20 +325,20 @@ button {
   min-height: 46px;
   max-width: 270px;
   padding: 0 12px;
-  border: 1px solid #cfddd8;
-  border-radius: 8px;
-  color: #18342c;
-  background: #fff;
+  border: 1px solid var(--crm-border);
+  border-radius: 10px;
+  color: var(--crm-text);
+  background: var(--crm-card);
   font-weight: 800;
 }
 
 .return-owner-button {
   min-height: 46px;
   padding: 0 12px;
-  border: 1px solid #cfddd8;
-  border-radius: 8px;
-  color: #18342c;
-  background: #fff;
+  border: 1px solid var(--crm-border);
+  border-radius: 10px;
+  color: var(--crm-text);
+  background: var(--crm-card);
   font-weight: 900;
 }
 
@@ -325,11 +353,17 @@ button {
   position: relative;
   display: grid;
   place-items: center;
-  width: 46px;
-  height: 46px;
-  color: #18342c;
-  background: #fff;
-  border: 1px solid #cfddd8;
+  width: 40px;
+  height: 40px;
+  color: var(--crm-text);
+  background: var(--crm-card);
+  border: 1px solid var(--crm-border);
+  transition: all 0.18s ease;
+}
+
+.icon-button:hover {
+  background: #f9fafb;
+  border-color: #d1d5db;
 }
 
 .notification-button span {
@@ -354,11 +388,17 @@ button {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  min-height: 46px;
-  padding: 0 16px;
+  min-height: 44px;
+  padding: 10px 16px;
   color: #fff;
-  background: #00a878;
+  background: var(--crm-primary);
   font-weight: 800;
+  transition: all 0.18s ease;
+}
+
+.submit-button:hover,
+.primary-action:hover {
+  background: var(--crm-primary-hover);
 }
 
 .mobile-only {
@@ -512,10 +552,10 @@ button {
 .panel,
 .client-card,
 .team-card {
-  border: 1px solid #d2dfda;
-  border-radius: 8px;
-  background: #fff;
-  box-shadow: 0 12px 30px rgba(24, 52, 44, 0.06);
+  border: 1px solid var(--crm-border);
+  border-radius: 12px;
+  background: var(--crm-card);
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.05);
 }
 
 .metric-card {
@@ -583,7 +623,7 @@ button {
 }
 
 .panel {
-  padding: 18px;
+  padding: 12px;
 }
 
 .panel-heading {
@@ -597,11 +637,12 @@ button {
 .panel-heading h2,
 .panel h2 {
   margin: 0;
-  font-size: 20px;
+  font-size: 18px;
+  color: var(--crm-text);
 }
 
 .panel-heading span {
-  color: #6c8079;
+  color: var(--crm-muted);
   font-size: 14px;
 }
 
@@ -670,21 +711,28 @@ button {
 
 .order-card {
   padding: 14px;
-  border: 1px solid #d7e4df;
-  border-radius: 8px;
-  background: #fff;
+  border: 1px solid var(--crm-border);
+  border-radius: 12px;
+  background: var(--crm-card);
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.04);
+  transition: all 0.18s ease;
+}
+
+.order-card:hover {
+  background: #f9fafb;
+  border-color: #d1d5db;
 }
 
 .current-user-badge {
   min-height: 46px;
   padding: 6px 12px;
-  border: 1px solid #cfddd8;
-  border-radius: 8px;
-  background: #fff;
+  border: 1px solid var(--crm-border);
+  border-radius: 10px;
+  background: var(--crm-card);
   display: grid;
   align-content: center;
   gap: 2px;
-  color: #18342c;
+  color: var(--crm-text);
 }
 
 .current-user-badge strong {
@@ -693,7 +741,7 @@ button {
 }
 
 .current-user-badge span {
-  color: #6c8079;
+  color: var(--crm-muted);
   font-size: 12px;
 }
 
@@ -747,7 +795,7 @@ button {
   gap: 18px;
   min-height: calc(100vh - 132px);
   grid-template-rows: auto auto minmax(0, 1fr);
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: Inter, Arial, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
 .manager-orders-page .panel,
@@ -804,9 +852,9 @@ button {
   flex-wrap: nowrap;
   justify-content: space-between;
   position: sticky;
-  top: 72px;
+  top: 64px;
   z-index: 6;
-  padding: 6px 8px;
+  padding: 8px 10px;
   background: #ffffff;
 }
 
@@ -832,7 +880,7 @@ button {
   min-height: 40px;
   padding: 0 44px 0 12px;
   border: 1px solid #e5e7eb;
-  border-radius: 999px;
+  border-radius: 10px;
   background: #fff;
   color: #111111;
   outline: none;
@@ -897,7 +945,9 @@ button {
   padding: 0 16px;
   white-space: nowrap;
   flex: 0 0 auto;
-  border-radius: 10px;
+  border-radius: 8px;
+  margin-left: auto;
+  box-shadow: 0 10px 24px rgba(37, 99, 235, 0.18);
 }
 
 .manager-orders-search-assist {
@@ -1122,9 +1172,7 @@ button {
 }
 
 .manager-orders-page .manager-orders-toolbar-filter button.primary {
-  border-color: #bfdbfe;
-  color: #1e3a8a;
-  background: #dbeafe;
+  color: #ffffff;
 }
 
 .manager-orders-toolbar-filter button,
@@ -1156,7 +1204,44 @@ button {
   min-width: 0;
   min-height: 40px;
   padding: 0 12px;
-  border-radius: 999px;
+  border-radius: 6px;
+}
+
+.manager-orders-toolbar-filter button:nth-child(1) {
+  background: #9ca3af;
+  color: #ffffff;
+  border-color: #9ca3af;
+}
+
+.manager-orders-toolbar-filter button:nth-child(2),
+.manager-orders-toolbar-filter button:nth-child(3) {
+  background: #3b82f6;
+  color: #ffffff;
+  border-color: #3b82f6;
+}
+
+.manager-orders-toolbar-filter button:nth-child(4) {
+  background: #10b981;
+  color: #ffffff;
+  border-color: #10b981;
+}
+
+.manager-orders-toolbar-filter button:nth-child(5) {
+  background: #374151;
+  color: #ffffff;
+  border-color: #374151;
+}
+
+.manager-orders-toolbar-filter button:nth-child(6) {
+  background: #ef4444;
+  color: #ffffff;
+  border-color: #ef4444;
+}
+
+.manager-orders-toolbar-filter button:nth-child(7) {
+  background: #f59e0b;
+  color: #ffffff;
+  border-color: #f59e0b;
 }
 
 .manager-orders-signals {
@@ -1227,13 +1312,18 @@ button {
   grid-template-columns: minmax(0, 1fr) 150px;
   gap: 12px;
   width: 100%;
-  padding: 14px;
+  padding: 10px;
   border: 1px solid #e5e7eb;
   border-left: 5px solid #e5e7eb;
   border-radius: 12px;
   background: #ffffff;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.04);
   text-align: left;
   transition: all 0.18s ease;
+}
+
+.manager-order-list-row:hover {
+  background: #f9fafb;
 }
 
 .manager-order-list-row.is-active {
@@ -1287,13 +1377,13 @@ button {
 
 .manager-order-list-top strong,
 .manager-order-list-client {
-  color: #111111;
+  color: var(--crm-text);
   font-weight: 600;
 }
 
 .manager-order-list-device,
 .manager-order-list-issue {
-  color: #6b7280;
+  color: var(--crm-muted);
   font-size: 13px;
   line-height: 1.35;
 }
@@ -1354,6 +1444,7 @@ button {
   min-height: 100%;
   padding: 16px;
   border: 1px solid #e5e7eb;
+  border-radius: 12px;
   background: #ffffff;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
   cursor: pointer;
@@ -1428,7 +1519,7 @@ button {
 .manager-order-heading-row h2 {
   font-size: 18px;
   letter-spacing: -0.02em;
-  color: #111111;
+  color: var(--crm-text);
 }
 
 .manager-order-status-badge {
