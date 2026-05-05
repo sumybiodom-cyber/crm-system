@@ -13397,6 +13397,8 @@ function OrdersPage(props: {
                 const remainingForBadge = debtSnapshot.remainingDebt;
                 const strictStatusLabel = strictManagerWorkflowStatus(order);
                 const actionMeta = managerActionMeta(order);
+                const canQuickPay = remainingForBadge > 0;
+                const canQuickIssue = simpleRepairStatus(order.status) === 'Готово' && order.status !== 'Видано';
                 return (
                   <button
                     type="button"
@@ -13428,6 +13430,34 @@ function OrdersPage(props: {
                         <span className="manager-order-metric-label">Дата</span>
                         <span className="manager-order-cell manager-order-cell-date">{order.intakeDate}</span>
                       </span>
+                      {(canQuickPay || canQuickIssue) && (
+                        <span className="manager-order-inline-actions">
+                          {canQuickPay && (
+                            <button
+                              type="button"
+                              className="manager-order-inline-action manager-order-inline-action-payment"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                openManagerPaymentModal(order);
+                              }}
+                            >
+                              Оплата
+                            </button>
+                          )}
+                          {canQuickIssue && (
+                            <button
+                              type="button"
+                              className="manager-order-inline-action manager-order-inline-action-issue"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                runManagerStatusAction(order.id, 'Видано');
+                              }}
+                            >
+                              Видати
+                            </button>
+                          )}
+                        </span>
+                      )}
                     </span>
                   </button>
                 );

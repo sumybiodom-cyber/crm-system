@@ -1350,7 +1350,7 @@ button {
 
 .manager-order-secondary {
   display: grid;
-  grid-template-columns: auto repeat(3, minmax(72px, auto));
+  grid-template-columns: auto repeat(3, minmax(72px, auto)) auto;
   gap: 14px;
   align-items: center;
   justify-content: end;
@@ -1428,6 +1428,49 @@ button {
   font-weight: 600;
   letter-spacing: 0.02em;
   text-transform: uppercase;
+}
+
+.manager-order-inline-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  opacity: 0.32;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.manager-order-list-row:hover .manager-order-inline-actions,
+.manager-order-list-row.is-active .manager-order-inline-actions {
+  opacity: 1;
+}
+
+.manager-order-inline-action {
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  transition: transform 0.2s ease, filter 0.2s ease, box-shadow 0.2s ease;
+}
+
+.manager-order-inline-action:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 10px rgba(15, 23, 42, 0.12);
+}
+
+.manager-order-inline-action-payment {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  color: #1d4ed8;
+}
+
+.manager-order-inline-action-issue {
+  background: #ecfdf5;
+  border-color: #bbf7d0;
+  color: #15803d;
 }
 
 .manager-order-cell-money,
@@ -3961,6 +4004,11 @@ button {
   .manager-order-cell-status {
     text-align: left;
     justify-self: start;
+  }
+
+  .manager-order-inline-actions {
+    opacity: 1;
+    justify-content: flex-start;
   }
 
   .manager-orders-grid {
