@@ -3492,9 +3492,7 @@ function calculateEngineerWorkCompensation(order: ServiceOrder, work: ServiceWor
   const operationName = inferPieceOperationName(work);
   const profile = getEngineerCompensationProfile(employeeName, users);
   if (profile.salaryType === 'piece_rate') {
-    const matchedRate = profile.pieceRates.find((item) => item.operationName === operationName)?.rate
-      ?? work.payrollFixedPerUnit
-      ?? 0;
+    const matchedRate = profile.pieceRates.find((item) => item.operationName === operationName)?.rate ?? 0;
     return {
       employee: employeeName,
       salaryType: profile.salaryType,
@@ -3507,7 +3505,7 @@ function calculateEngineerWorkCompensation(order: ServiceOrder, work: ServiceWor
       earning: Math.round(matchedRate * qty),
     };
   }
-  const percent = work.payrollPercent ?? profile.engineerPercent;
+  const percent = profile.engineerPercent;
   return {
     employee: employeeName,
     salaryType: profile.salaryType,
@@ -3516,7 +3514,7 @@ function calculateEngineerWorkCompensation(order: ServiceOrder, work: ServiceWor
     laborAmount,
     workType,
     operationName,
-    rateLabel: `${percent}%`,
+    rateLabel: `${percent}% від робіт`,
     earning: Math.round(laborAmount * (percent / 100)),
   };
 }
@@ -15479,23 +15477,33 @@ function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations,
       </section>
       <section className="panel-subsection">
         <div className="panel-heading">
-          <h2>{isEngineerRole ? 'Мой заработок по заказу' : 'Работы и заработок сотрудника'}</h2>
-          <span>{money(totalEmployeeEarning)} по этому заказу</span>
+          <h2>{selectedEngineerProfile.salaryType === 'piece_rate' ? 'Операції для нарахування' : 'Нарахування від робіт'}</h2>
+          <span>{money(totalEmployeeEarning)} по цьому замовленню</span>
         </div>
-        <div className="table payroll-table">
-          <div className="table-row table-head"><span>Тип работы</span><span>Исполнитель</span><span>Количество</span><span>Ставка</span><span>Сумма работы</span><span>Заработок</span></div>
-          {workCompensationRows.map((row) => (
-            <div className="table-row" key={row.id}>
-              <span>{row.workType}<small>{row.workName}</small></span>
-              <span>{row.employee}</span>
-              <span>{row.qty}</span>
-              <span>{row.rate}</span>
-              <span>{money(row.workAmount)}</span>
-              <span>{money(row.earning)}</span>
+        {selectedEngineerProfile.salaryType === 'percentage' ? (
+          <div className="table payroll-table">
+            <div className="table-row table-head"><span>Інженер</span><span>Сума робіт</span><span>Ставка</span><span>Зарплата</span></div>
+            <div className="table-row">
+              <span>{selectedOrder.engineer || '—'}</span>
+              <span>{money(laborAmount)}</span>
+              <span>{selectedEngineerProfile.engineerPercent}% від робіт</span>
+              <span>{money(totalEmployeeEarning)}</span>
             </div>
-          ))}
-          {workCompensationRows.length === 0 && <div className="empty-state">Работы ещё не добавлены, начисление пока не считается.</div>}
-        </div>
+          </div>
+        ) : (
+          <div className="table payroll-table">
+            <div className="table-row table-head"><span>Операція</span><span>Кількість</span><span>Ставка</span><span>Разом</span></div>
+            {workCompensationRows.map((row) => (
+              <div className="table-row" key={row.id}>
+                <span>{row.operationName}<small>{row.workName}</small></span>
+                <span>{row.qty}</span>
+                <span>{row.rate}</span>
+                <span>{money(row.earning)}</span>
+              </div>
+            ))}
+            {workCompensationRows.length === 0 && <div className="empty-state">Операції ще не додані, нарахування поки не рахується.</div>}
+          </div>
+        )}
       </section>
       {canShowCommentBlock && <section className="panel-subsection">
         <div className="panel-heading"><h2>{isEngineerRole ? 'Проблема, диагностика и тест' : 'Комментарии по заказу'}</h2><span>коротко по суті</span></div>
