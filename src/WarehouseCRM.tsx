@@ -276,6 +276,7 @@ type ServiceOrder = {
   assignedTo?: string;
   createdByUserId?: string;
   createdAt?: string;
+  issuedAt?: string;
   qrUrl: string;
   client: string;
   phone: string;
@@ -5602,7 +5603,7 @@ useEffect(() => {
         return;
       }
       if (remaining > 0) {
-        setNotice('Спочатку закрийте оплату. До видачі борг має бути 0.');
+        setNotice('Неможливо видати — є заборгованість');
         return;
       }
     }
@@ -5616,6 +5617,7 @@ useEffect(() => {
             ...item,
             status: statusToStore,
             statusChangedAt: today,
+            issuedAt: nextStatus === 'Видано' ? today : item.issuedAt,
             issuedDebtAmount: issuedDebtAmount ?? item.issuedDebtAmount,
             issuedDebtAt: issuedDebtAmount ? today : item.issuedDebtAt,
             issuedDebtManager: issuedDebtAmount ? activeUser.name : item.issuedDebtManager,
@@ -5641,6 +5643,9 @@ useEffect(() => {
         { ...targetOrder, status: statusToStore },
         statusToStore === 'Готовий до видачі' ? 'Готово до видачі' : 'Очікує оплату',
       );
+    }
+    if (nextStatus === 'Видано') {
+      setNotice('Замовлення видано');
     }
   }
 
@@ -5823,10 +5828,11 @@ useEffect(() => {
       return null;
     }
     const orderTotal = Math.max(targetOrder.repairPrice ?? targetOrder.estimatedAmount ?? orderTotals(targetOrder).total, 0);
-    const alreadyBooked = targetOrder.payments.reduce((sum, payment) => sum + payment.amount, 0);
+    const alreadyBooked = targetOrder.payments.filter(paymentCountsAsApplied).reduce((sum, payment) => sum + payment.amount, 0);
     const remaining = Math.max(orderTotal - alreadyBooked, 0);
-    if (repairPrice > remaining) {
-      setNotice(`Сума платежу не може перевищувати "до оплати": ${money(remaining)}.`);
+    const acceptedPayment = Math.min(repairPrice, remaining);
+    if (acceptedPayment <= 0) {
+      setNotice('Оплата не потрібна: борг уже закрито.');
       return null;
     }
     if (!canAcceptShiftBasedPayment(paymentType)) {
@@ -5836,12 +5842,12 @@ useEffect(() => {
       ? 'подтвержден'
       : paymentType === 'карта'
         ? 'проведено'
-        : 'ожидает поступления';
+        : 'подтвержден';
     const orderPaymentStatus: Payment['status'] = paymentType === 'наличные'
       ? 'Підтверджено'
       : paymentType === 'карта'
         ? 'Проведено'
-        : 'Очікує надходження';
+        : 'Підтверджено';
     const paymentRecord: SimpleOrderPaymentRecord = {
       id: uid('SMPAY'),
       client: targetOrder?.client ?? '',
@@ -5849,7 +5855,7 @@ useEffect(() => {
       entityId: orderId,
       clientTaxId: clientTaxId(targetOrder.client, targetOrder.phone),
       orderId,
-      amount: repairPrice,
+      amount: acceptedPayment,
       method: paymentType,
       paymentKind,
       status: ledgerStatus,
@@ -5861,7 +5867,7 @@ useEffect(() => {
     const orderPaymentRecord: Payment = {
       id: paymentRecord.id,
       date: today,
-      amount: repairPrice,
+      amount: acceptedPayment,
       method: mapSimpleMethodToPaymentMethod(paymentType),
       type: mapSimpleKindToPaymentType(paymentKind),
       transactionNo: '',
@@ -5874,21 +5880,28 @@ useEffect(() => {
       cashShiftId: paymentType === 'перевод' ? undefined : cashShift.id,
       countedAtShiftId: paymentType === 'перевод' ? undefined : cashShift.id,
     };
+    const nextRemaining = Math.max(clientOrderDebt(targetOrder) - acceptedPayment, 0);
     const updatedOrders = orders.map((order) => (
       order.id === orderId
         ? {
             ...order,
-            repairPrice,
+            repairPrice: order.repairPrice ?? repairPrice,
             repairPaymentMethod: paymentType,
-            status: paymentType === 'наличные' ? nextOrderStatusAfterAutoPayment(order, Math.max(clientOrderDebt(order) - repairPrice, 0)) : order.status,
-            statusChangedAt: paymentType === 'наличные' ? (nextOrderStatusAfterAutoPayment(order, Math.max(clientOrderDebt(order) - repairPrice, 0)) !== order.status ? today : order.statusChangedAt) : order.statusChangedAt,
+            status: nextRemaining <= 0
+              ? 'Готовий до видачі'
+              : ['Видано', 'Закрито', 'Скасовано'].includes(order.status)
+                ? order.status
+                : 'В ремонті',
+            statusChangedAt: (
+              (nextRemaining <= 0 ? 'Готовий до видачі' : ['Видано', 'Закрито', 'Скасовано'].includes(order.status) ? order.status : 'В ремонті') !== order.status
+            ) ? today : order.statusChangedAt,
             vatStatus: order.legalEntity ? 'Очікує ПН' : order.vatStatus,
             payments: [
               orderPaymentRecord,
               ...order.payments,
             ],
             activityLog: [
-              { id: uid('ACT'), date: today, action: 'Платіж', detail: `${repairPrice} · ${paymentKind} · ${paymentProcessingLabel(orderPaymentRecord)}${paymentReason.trim() ? ` · ${paymentReason.trim()}` : ''}` },
+              { id: uid('ACT'), date: today, action: 'Платіж', detail: `${acceptedPayment} · ${paymentKind} · ${paymentProcessingLabel(orderPaymentRecord)}${paymentReason.trim() ? ` · ${paymentReason.trim()}` : ''}` },
               ...(order.activityLog ?? []),
             ],
           }
@@ -5900,17 +5913,19 @@ useEffect(() => {
     setOrders(updatedOrders);
     setSimplePayments(updatedPayments);
     if (paymentType !== 'перевод') {
-      registerCashPayment(repairPrice, mapSimpleMethodToPaymentMethod(paymentType));
+      registerCashPayment(acceptedPayment, mapSimpleMethodToPaymentMethod(paymentType));
     }
     if (orderPaymentStatus === 'Підтверджено') {
-      logAction('Підтвердження платежу', orderId, `${money(repairPrice)} підтверджено одразу (${paymentType}).`);
-      if (Math.max(clientOrderDebt(targetOrder) - repairPrice, 0) <= 0) {
-        appendSimpleOrderActivity(orderId, 'Борг закрито', `Платіж ${money(repairPrice)} підтверджено одразу`);
+      logAction('Підтвердження платежу', orderId, `${money(acceptedPayment)} підтверджено одразу (${paymentType}).`);
+      if (nextRemaining <= 0) {
+        appendSimpleOrderActivity(orderId, 'Борг закрито', `Платіж ${money(acceptedPayment)} підтверджено одразу`);
       }
     } else {
-      logAction('Створення платежу', orderId, `${money(repairPrice)} · ${paymentKind} · ${paymentType} · ${paymentProcessingLabel(orderPaymentRecord)}.`);
+      logAction('Створення платежу', orderId, `${money(acceptedPayment)} · ${paymentKind} · ${paymentType} · ${paymentProcessingLabel(orderPaymentRecord)}.`);
     }
-    setNotice(`Платіж для ${orderId} додано. Статус: ${paymentProcessingLabel(orderPaymentRecord)}.`);
+    setNotice(nextRemaining <= 0
+      ? `Оплату для ${orderId} прийнято. Замовлення готове до видачі.`
+      : `Оплату для ${orderId} прийнято. Залишок: ${money(nextRemaining)}.`);
     return paymentRecord.id;
   }
 
@@ -13406,13 +13421,13 @@ function OrdersPage(props: {
                 const remainingForBadge = debtSnapshot.remainingDebt;
                 const strictStatusLabel = strictManagerWorkflowStatus(order);
                 const actionMeta = managerActionMeta(order);
-                const canQuickPay = remainingForBadge > 0;
+                const canQuickPay = remainingForBadge > 0 && order.status !== 'Видано';
                 const canQuickIssue = simpleRepairStatus(order.status) === 'Готово' && order.status !== 'Видано';
                 return (
                   <button
                     type="button"
                     key={order.id}
-                    className={`manager-order-list-row manager-order-compact-row${managerActiveOrderId === order.id && isManagerOrderDetailOpen ? ' is-active' : ''}${actionMeta.signal === 'danger' ? ' is-problem' : actionMeta.signal === 'warning' ? ' is-warning' : actionMeta.signal === 'success' ? ' is-success' : ''}`}
+                    className={`manager-order-list-row manager-order-compact-row${managerActiveOrderId === order.id && isManagerOrderDetailOpen ? ' is-active' : ''}${order.status === 'Видано' ? ' is-issued' : ''}${actionMeta.signal === 'danger' ? ' is-problem' : actionMeta.signal === 'warning' ? ' is-warning' : actionMeta.signal === 'success' ? ' is-success' : ''}`}
                     onClick={() => openManagerOrderDetails(order.id)}
                   >
                     <span className="manager-order-primary">
