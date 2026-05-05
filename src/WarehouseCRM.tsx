@@ -3070,6 +3070,16 @@ function orderTotals(order: ServiceOrder) {
   return { works, parts, delivery, additionalExpenses, consumables, externalServices, total, paid, debt: Math.max(total - paid, 0), purchaseCost, engineerSalary, cost, profit: total - cost, finalProfit: isFinal ? total - cost : 0, isFinal };
 }
 
+function orderActualProfit(order: ServiceOrder, users?: User[]) {
+  const totals = orderTotals(order);
+  const totalPaid = totals.paid;
+  const partsCost = totals.purchaseCost;
+  const engineerSalary = order.works.reduce((sum, work) => sum + calculateEngineerWorkCompensation(order, work, users).earning, 0);
+  const expenses = partsCost + engineerSalary;
+  const profit = totalPaid - expenses;
+  return { totalPaid, partsCost, engineerSalary, expenses, profit };
+}
+
 function paymentTypeFor(amount: number, debtBeforePayment: number, fallback: PaymentType): PaymentType {
   if (fallback === 'Передплата' || fallback === 'Повернення коштів') return fallback;
   if (amount >= debtBeforePayment) return 'Повна оплата';
@@ -13640,6 +13650,7 @@ function OrdersPage(props: {
               {managerVisibleOrders.map((order) => {
                 const debtSnapshot = orderDebtSnapshot(order);
                 const remainingForBadge = debtSnapshot.remainingDebt;
+                const profitSnapshot = orderActualProfit(order, props.users);
                 const strictStatusLabel = strictManagerWorkflowStatus(order);
                 const actionMeta = managerActionMeta(order);
                 const canQuickPay = remainingForBadge > 0 && order.status !== 'Видано';
@@ -13670,6 +13681,10 @@ function OrdersPage(props: {
                       <span className="manager-order-metric">
                         <span className="manager-order-metric-label">Борг</span>
                         <span className={`manager-order-cell manager-order-cell-money ${remainingForBadge > 0 ? 'manager-order-cell-debt manager-order-debt-badge' : ''}`}>{remainingForBadge > 0 ? `● ${money(remainingForBadge)}` : '—'}</span>
+                      </span>
+                      <span className="manager-order-metric">
+                        <span className="manager-order-metric-label">Прибуток</span>
+                        <span className={`manager-order-cell manager-order-cell-money manager-order-profit-badge ${profitSnapshot.profit > 0 ? 'is-positive' : profitSnapshot.profit < 0 ? 'is-negative' : 'is-neutral'}`}>{money(profitSnapshot.profit)}</span>
                       </span>
                       <span className="manager-order-metric manager-order-metric-date">
                         <span className="manager-order-metric-label">Дата</span>
@@ -13727,7 +13742,6 @@ function OrdersPage(props: {
                 .filter((entry) => entry.client.trim().toLowerCase() === order.client.trim().toLowerCase() || entry.phone.replace(/\D/g, '') === order.phone.replace(/\D/g, ''))
                 .reduce((sum, entry) => sum + clientOrderDebt(entry), 0);
               const strictStatusLabel = strictManagerWorkflowStatus(order);
-              const orderCost = order.parts.reduce((sum, part) => sum + part.qty * part.cost, 0);
               const totalAmount = Math.max(order.repairPrice ?? order.estimatedAmount ?? orderTotals(order).total, 0);
               const paidAmount = order.payments.filter(paymentCountsAsApplied).reduce((sum, payment) => sum + payment.amount, 0);
               const remainingAmount = orderDebtAmount(order);
@@ -13755,7 +13769,9 @@ function OrdersPage(props: {
               const lastPaymentMethod = latestPayment?.method === 'Готівка' ? 'Готівка' : latestPayment?.method === 'Картка' ? 'Термінал' : latestPayment?.method === 'Безготівка' ? 'Банк' : '—';
               const lastPaymentDate = latestPayment?.date ?? '—';
               const lastPaymentStatus = latestPayment ? paymentProcessingLabel(latestPayment) : '—';
-              const orderProfit = totalAmount - orderCost;
+              const profitDetails = orderActualProfit(order, props.users);
+              const orderProfit = profitDetails.profit;
+              const orderCost = profitDetails.expenses;
               const nextManagerAction = !order.engineer
                 ? { label: 'Призначити інженера', run: () => undefined }
                 : canMoveToRepair
@@ -13917,7 +13933,9 @@ function OrdersPage(props: {
                         </div>
                         <div className="manager-order-payment-grid">
                           <label className="manager-order-money-primary">Сума ремонту<input type="number" min={0} value={order.repairPrice ?? ''} onKeyDown={handleManagerFieldKeyDown} onChange={(event) => props.patchSimpleManagerOrder(order.id, { repairPrice: event.target.value ? Number(event.target.value) : undefined })} /></label>
-                          <label>Оплачено<input value={money(paidAmount)} readOnly /></label>
+                          <label>Оплачено<input value={money(profitDetails.totalPaid)} readOnly /></label>
+                          <label>Запчастини<input value={money(profitDetails.partsCost)} readOnly /></label>
+                          <label>Зарплата інженера<input value={money(profitDetails.engineerSalary)} readOnly /></label>
                           <label className={remainingAmount > 0 ? 'manager-order-profit-negative' : 'manager-order-profit-positive'}>Довг<input value={money(remainingAmount)} readOnly /></label>
                           <label>Статус<input value={paymentVisualStatus} readOnly /></label>
                           <label>Тип оплати<input value={lastPaymentMethod} readOnly /></label>
@@ -14463,6 +14481,7 @@ function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations,
   users: User[];
 }) {
   const totals = orderTotals(selectedOrder);
+  const actualProfit = orderActualProfit(selectedOrder, users);
   const simplePaymentStatus = simpleRepairPaymentStatus(selectedOrder);
   const controlState = buildOrderControlState(selectedOrder, allOrders, notifications, orderUnits);
   const statusAge = daysSince(selectedOrder.statusChangedAt);
@@ -15082,7 +15101,10 @@ function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations,
         {canShowManagerView && <Info label="Коментар" value={selectedOrder.intakeComment ?? 'Без коментаря'} />}
         {canShowManagerView && <Info label="Текущий этап" value={statusStage(selectedOrder.status)} />}
         {canShowManagerView && <Info label="Сума" value={displayedOrderAmount} />}
-        {canShowManagerView && <Info label="Оплачено" value={money(totals.paid)} />}
+        {canShowManagerView && <Info label="Оплачено" value={money(actualProfit.totalPaid)} />}
+        {canShowManagerView && <Info label="Запчасти" value={money(actualProfit.partsCost)} />}
+        {canShowManagerView && <Info label="Зарплата інженера" value={money(actualProfit.engineerSalary)} />}
+        {canShowManagerView && <Info label="Прибуток" value={money(actualProfit.profit)} />}
         {canShowManagerView && <Info label="Долг" value={money(totals.debt)} />}
         {canShowManagerView && <Info label="Статус оплаты" value={simplePaymentStatus} />}
         {canShowManagerView && <Info label="Клиент уведомлён" value={clientNotified ? 'Уведомлён' : 'Не уведомлён'} />}
@@ -17897,14 +17919,19 @@ function FinancePage({
     .filter((payment) => isWithinSelectedPeriod(payment.date))
     .filter((payment) => managerFilter === 'all' || managerNameByPayment(payment) === managerFilter)
     .filter((payment) => clientTypeFilter === 'all' || clientTypeByPayment(payment) === clientTypeFilter);
+  const orderProfitRows = filteredOrders.map((order) => ({
+    order,
+    finance: orderActualProfit(order, users),
+  }));
 
   const totalOrdersCount = filteredOrders.length;
   const totalOrdersAmount = filteredOrders.reduce((sum, order) => sum + Math.max(order.repairPrice ?? order.estimatedAmount ?? orderTotals(order).total, 0), 0);
-  const totalPaid = filteredOrders.reduce((sum, order) => sum + orderDebtSnapshot(order).paid, 0);
+  const totalPaid = orderProfitRows.reduce((sum, row) => sum + row.finance.totalPaid, 0);
   const totalDebt = filteredOrders.reduce((sum, order) => sum + orderDebtSnapshot(order).remainingDebt, 0);
   const unpaidActsAmount = visibleActs.reduce((sum, act) => sum + act.remainingAmount, 0);
   const openContractAmount = visibleContracts.reduce((sum, contract) => sum + Math.max(contractUsage(contract, orders).used - contractClosedAmount(contract, contractActs), 0), 0);
-  const totalProfit = filteredOrders.reduce((sum, order) => sum + orderTotals(order).finalProfit, 0);
+  const totalExpenses = orderProfitRows.reduce((sum, row) => sum + row.finance.expenses, 0);
+  const totalProfit = orderProfitRows.reduce((sum, row) => sum + row.finance.profit, 0);
 
   const debtorRows = Array.from(
     filteredOrders
@@ -17949,8 +17976,8 @@ function FinancePage({
   };
 
   const averageProfit = totalOrdersCount > 0 ? totalProfit / totalOrdersCount : 0;
-  const topProfitOrders = [...filteredOrders]
-    .map((order) => ({ id: order.id, client: order.client, profit: orderTotals(order).finalProfit }))
+  const topProfitOrders = orderProfitRows
+    .map(({ order, finance }) => ({ id: order.id, client: order.client, profit: finance.profit }))
     .sort((a, b) => b.profit - a.profit)
     .slice(0, 5);
 
@@ -18042,11 +18069,12 @@ function FinancePage({
       <section className="executive-kpis finance-center-kpis">
         <article className="executive-kpi-card"><span>Всього замовлень</span><strong>{String(totalOrdersCount)}</strong></article>
         <article className="executive-kpi-card"><span>Загальна сума замовлень</span><strong>{money(totalOrdersAmount)}</strong></article>
-        <article className="executive-kpi-card"><span>Оплачено</span><strong>{money(totalPaid)}</strong></article>
+        <article className="executive-kpi-card"><span>Загальна виручка</span><strong>{money(totalPaid)}</strong></article>
+        <article className="executive-kpi-card"><span>Загальні витрати</span><strong>{money(totalExpenses)}</strong></article>
+        <article className="executive-kpi-card"><span>Загальна прибуток</span><strong>{money(totalProfit)}</strong></article>
         <article className="executive-kpi-card"><span>В боргу</span><strong>{money(totalDebt)}</strong></article>
         <article className="executive-kpi-card"><span>В актах, не оплачено</span><strong>{money(unpaidActsAmount)}</strong></article>
         <article className="executive-kpi-card"><span>В договорах, не закрито</span><strong>{money(openContractAmount)}</strong></article>
-        <article className="executive-kpi-card"><span>Прибуток</span><strong>{money(totalProfit)}</strong></article>
       </section>
 
       <section className="manager-orders-signals">
@@ -18121,10 +18149,12 @@ function FinancePage({
       <section className="executive-grid finance-center-bottom-grid">
         <section className="panel executive-panel">
           <div className="panel-heading">
-            <h2>Прибуток</h2>
+            <h2>Фінанси / Прибуток</h2>
             <span>{filteredOrders.length} замовлень</span>
           </div>
           <div className="details-grid">
+            <Info label="Загальна виручка" value={money(totalPaid)} />
+            <Info label="Загальні витрати" value={money(totalExpenses)} />
             <Info label="Загальна прибуток" value={money(totalProfit)} />
             <Info label="Середня з замовлення" value={money(averageProfit)} />
           </div>

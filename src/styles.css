@@ -1455,6 +1455,32 @@ button {
   text-align: left;
 }
 
+.manager-order-profit-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.manager-order-profit-badge.is-positive {
+  color: #166534;
+  background: #dcfce7;
+}
+
+.manager-order-profit-badge.is-neutral {
+  color: #4b5563;
+  background: #f3f4f6;
+}
+
+.manager-order-profit-badge.is-negative {
+  color: #b91c1c;
+  background: #fee2e2;
+}
+
 .manager-order-id-badge {
   display: inline-flex;
   align-items: center;
