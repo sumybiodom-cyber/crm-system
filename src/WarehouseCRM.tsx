@@ -936,6 +936,15 @@ type ActionLog = {
   comment: string;
 };
 
+type EngineerPayment = {
+  id: string;
+  engineerId: string;
+  amount: number;
+  method: 'наличка' | 'карта';
+  createdAt: string;
+  comment?: string;
+};
+
 type BackupPayload = {
   version: 1;
   users: User[];
@@ -953,6 +962,7 @@ type BackupPayload = {
   taxInvoices: TaxInvoice[];
   actionLogs: ActionLog[];
   cashShift: CashShift;
+  engineerPayments?: EngineerPayment[];
 };
 
 type BackupSnapshot = {
@@ -2025,6 +2035,7 @@ const CLIENTS_STORAGE_KEY = 'crm_clients';
 const PRODUCTS_STORAGE_KEY = 'crm_products';
 const ORDERS_STORAGE_KEY = 'crm_orders';
 const PAYMENTS_STORAGE_KEY = 'crm_payments';
+const ENGINEER_PAYMENTS_STORAGE_KEY = 'crm_engineer_payments';
 const TAX_INVOICES_STORAGE_KEY = 'crm_tax_invoices';
 const CONTRACTS_STORAGE_KEY = 'crm_contracts';
 const CONTRACT_ACTS_STORAGE_KEY = 'crm_contract_acts';
@@ -2262,6 +2273,28 @@ function loadSimplePaymentsFromStorage(): SimpleOrderPaymentRecord[] {
 
 function saveSimplePaymentsToStorage(payments: SimpleOrderPaymentRecord[]) {
   localStorage.setItem(PAYMENTS_STORAGE_KEY, JSON.stringify(payments));
+}
+
+function loadEngineerPaymentsFromStorage(): EngineerPayment[] {
+  try {
+    const raw = localStorage.getItem(ENGINEER_PAYMENTS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.map((item) => ({
+      id: String(item.id),
+      engineerId: String(item.engineerId),
+      amount: Number(item.amount) || 0,
+      method: item.method === 'карта' ? 'карта' : 'наличка',
+      createdAt: String(item.createdAt ?? today),
+      comment: typeof item.comment === 'string' ? item.comment : undefined,
+    } satisfies EngineerPayment)) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveEngineerPaymentsToStorage(items: EngineerPayment[]) {
+  localStorage.setItem(ENGINEER_PAYMENTS_STORAGE_KEY, JSON.stringify(items));
 }
 
 function loadContractsFromStorage() {
@@ -4574,6 +4607,7 @@ useEffect(() => {
   const [documents, setDocuments] = useState<PrintDocument[]>(initialDocuments);
   const [taxInvoices, setTaxInvoices] = useState<TaxInvoice[]>(() => loadTaxInvoicesFromStorage());
   const [simplePayments, setSimplePayments] = useState<SimpleOrderPaymentRecord[]>(() => loadSimplePaymentsFromStorage());
+  const [engineerPayments, setEngineerPayments] = useState<EngineerPayment[]>(() => loadEngineerPaymentsFromStorage());
   const [clientNotifications, setClientNotifications] = useState<ClientNotification[]>(initialClientNotifications);
   const [internalMessages, setInternalMessages] = useState<InternalMessage[]>(initialInternalMessages);
   const [notificationTemplates] = useState<ClientNotificationTemplate[]>(clientNotificationTemplates);
@@ -4840,6 +4874,9 @@ useEffect(() => {
   useEffect(() => {
     saveSimplePaymentsToStorage(simplePayments);
   }, [simplePayments]);
+  useEffect(() => {
+    saveEngineerPaymentsToStorage(engineerPayments);
+  }, [engineerPayments]);
 
   useEffect(() => {
     saveContractsToStorage(contracts);
@@ -5321,6 +5358,7 @@ useEffect(() => {
       products,
       orders,
       payments: simplePayments,
+      engineerPayments,
       contracts,
       contractActs,
       bankImportItems,
@@ -5378,6 +5416,7 @@ useEffect(() => {
     saveMovementsToStorage(payload.movements);
     saveTaxInvoicesToStorage(payload.taxInvoices ?? []);
     saveCashShiftToStorage(payload.cashShift);
+    saveEngineerPaymentsToStorage(payload.engineerPayments ?? []);
     const restoredAudit = [] as ActionLog[];
     setUsers(payload.users);
     setCustomerList(payload.clients);
@@ -5393,6 +5432,7 @@ useEffect(() => {
     setMovements(payload.movements);
     setTaxInvoices((payload.taxInvoices ?? []).map(normalizeStoredTaxInvoice));
     setCashShift(payload.cashShift ?? initialCashShift);
+    setEngineerPayments(payload.engineerPayments ?? []);
     setSelectedOrderId(payload.orders[0]?.id ?? '');
     setSelectedProductId(payload.products[0]?.id ?? '');
     setSelectedSaleProductId(payload.products[0]?.id ?? '');
@@ -9429,6 +9469,42 @@ useEffect(() => {
     setNotice(method === 'Безготівка' ? `${comment}: безготівку ${money(amount)} зафіксовано для продажу ${sale.id}. Потрібне підтвердження бухгалтера.` : `${comment}: прийнято ${money(amount)} для продажу ${sale.id}.`);
   }
 
+  function addEngineerPayment(payment: { engineerId: string; amount: string; method: 'наличка' | 'карта'; comment: string }) {
+    const engineer = users.find((user) => user.id === payment.engineerId);
+    if (!engineer) {
+      setNotice('Інженера не знайдено.');
+      return false;
+    }
+    const amount = Number(payment.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setNotice('Вкажіть коректну суму виплати.');
+      return false;
+    }
+    const accrued = orders.flatMap((order) => order.works.map((work) => ({ order, work })))
+      .filter(({ order, work }) => (work.engineer ?? order.engineer) === engineer.name)
+      .reduce((sum, { order, work }) => {
+        const paidAndClosed = ['Видано', 'Закрито'].includes(order.status) && orderTotals(order).debt <= 0 && orderTotals(order).paid > 0;
+        return sum + (paidAndClosed ? calculateEngineerWorkCompensation(order, work, users).earning : 0);
+      }, 0);
+    const paidOut = engineerPayments.filter((item) => item.engineerId === engineer.id).reduce((sum, item) => sum + item.amount, 0);
+    const balance = accrued - paidOut;
+    if (amount - balance > 0.01) {
+      setNotice(`Не можна виплатити більше залишку: ${money(Math.max(balance, 0))}.`);
+      return false;
+    }
+    const record: EngineerPayment = {
+      id: uid('ENGPAY'),
+      engineerId: engineer.id,
+      amount,
+      method: payment.method,
+      createdAt: today,
+      comment: payment.comment.trim() || undefined,
+    };
+    setEngineerPayments((current) => [record, ...current]);
+    setNotice(`Виплату для ${engineer.name} збережено.`);
+    return true;
+  }
+
   function issueSale(sale: Sale) {
     const totals = saleTotals(sale);
     if (totals.debt > 0) {
@@ -10255,7 +10331,7 @@ useEffect(() => {
           />
         )}
         {canViewPage(page) && page === 'reports' && <ReportsPage orders={orders} sales={sales} purchases={purchases} receipts={receipts} movements={movements} products={products} actionLogs={actionLogs} cashShift={cashShift} canDo={canDo} exportAccounting={exportAccounting} />}
-        {canViewPage(page) && page === 'payroll' && <PayrollPage orders={orders} activeUser={viewUser} users={users} />}
+        {canViewPage(page) && page === 'payroll' && <PayrollPage orders={orders} activeUser={viewUser} users={users} engineerPayments={engineerPayments} addEngineerPayment={addEngineerPayment} />}
         {canViewPage(page) && page === 'acceptance' && <AcceptanceChecklistPage />}
         {canViewPage(page) && page === 'team' && <TeamPage users={users} setUsers={setUsers} activeUser={viewUser} />}
         {canViewPage(page) && page === 'settings' && (
@@ -18241,9 +18317,10 @@ function ReportsPage({ orders, sales, purchases, receipts, movements, products, 
   );
 }
 
-function PayrollPage({ orders, activeUser, users }: { orders: ServiceOrder[]; activeUser: User; users: User[] }) {
+function PayrollPage({ orders, activeUser, users, engineerPayments, addEngineerPayment }: { orders: ServiceOrder[]; activeUser: User; users: User[]; engineerPayments: EngineerPayment[]; addEngineerPayment: (payment: { engineerId: string; amount: string; method: 'наличка' | 'карта'; comment: string }) => boolean; }) {
   const closedStatuses: OrderStatus[] = ['Видано', 'Закрито'];
   const [periodFilter, setPeriodFilter] = useState<'today' | 'week' | 'month'>('today');
+  const [paymentDraft, setPaymentDraft] = useState<null | { engineerId: string; amount: string; method: 'наличка' | 'карта'; comment: string }>(null);
   const todayDate = parseDateTime(today) ?? new Date();
   const isInPeriod = (dateText?: string) => {
     if (!dateText) return false;
@@ -18286,11 +18363,21 @@ function PayrollPage({ orders, activeUser, users }: { orders: ServiceOrder[]; ac
       current.orders.add(row.order.id);
       current.workAmount += row.workAmount;
       current.accrued += row.accrued;
-      current.status = row.status === 'Нараховано' ? 'Виплачено' : 'Нараховано';
       map.set(row.employee, current);
       return map;
     }, new Map<string, { employee: string; orders: Set<string>; workAmount: number; accrued: number; salaryType: EngineerSalaryType; status: 'Нараховано' | 'Виплачено' }>()),
-  ).map(([, value]) => value);
+  ).map(([, value]) => {
+    const engineer = users.find((user) => user.name === value.employee);
+    const paidOut = engineer ? engineerPayments.filter((payment) => payment.engineerId === engineer.id).reduce((sum, payment) => sum + payment.amount, 0) : 0;
+    const balance = value.accrued - paidOut;
+    return {
+      ...value,
+      engineerId: engineer?.id ?? value.employee,
+      paidOut,
+      balance,
+      status: balance <= 0 ? 'Виплачено' : 'Нараховано' as 'Нараховано' | 'Виплачено',
+    };
+  });
   const todayKey = extractDayKey(today);
   const monthKey = extractMonthKey(today);
   const completedVisibleRows = visibleRows.filter((row) => row.status === 'Нараховано');
@@ -18306,6 +18393,11 @@ function PayrollPage({ orders, activeUser, users }: { orders: ServiceOrder[]; ac
   const visibleMonthOperations = completedVisibleRows.filter((row) => row.completedAt && extractMonthKey(row.completedAt) === monthKey).length;
   const isEngineer = activeUser.role === 'Інженер';
   const isSupervisor = activeUser.role === 'Руководитель' || activeUser.role === 'Адміністратор';
+  const submitEngineerPayment = () => {
+    if (!paymentDraft) return;
+    const ok = addEngineerPayment(paymentDraft);
+    if (ok) setPaymentDraft(null);
+  };
 
   return (
     <div className="page-grid">
@@ -18351,15 +18443,16 @@ function PayrollPage({ orders, activeUser, users }: { orders: ServiceOrder[]; ac
       <section className="panel">
         <div className="panel-heading"><h2>Зведення по зарплаті</h2><span>{employeeSummaries.length} інженерів</span></div>
         <div className="table payroll-table">
-          <div className="table-row table-head"><span>Інженер</span><span>Кількість замовлень</span><span>Сума робіт</span><span>Сума нарахувань</span><span>Період</span><span>Статус</span></div>
+          <div className="table-row table-head"><span>Інженер</span><span>Кількість замовлень</span><span>Нараховано</span><span>Виплачено</span><span>Залишок</span><span>Статус</span></div>
           {employeeSummaries.map((row) => (
-            <div className="table-row" key={`summary-${row.employee}`}>
+            <div className="table-row" key={`summary-${row.employee}`} style={row.balance > 0 ? { background: '#fef3c7' } : row.balance < 0 ? { background: '#fee2e2' } : { background: '#dcfce7' }}>
               <span>{row.employee}</span>
               <span>{row.orders.size}</span>
-              <span>{money(row.workAmount)}</span>
               <span>{money(row.accrued)}</span>
-              <span>{periodFilter === 'today' ? 'Сьогодні' : periodFilter === 'week' ? 'Тиждень' : 'Місяць'}</span>
+              <span>{money(row.paidOut)}</span>
+              <span>{money(row.balance)}</span>
               <span>{row.status}</span>
+              {!isEngineer && row.balance > 0 && <button type="button" onClick={() => setPaymentDraft({ engineerId: row.engineerId, amount: String(row.balance), method: 'наличка', comment: '' })}>Виплатити</button>}
             </div>
           ))}
         </div>
@@ -18390,6 +18483,34 @@ function PayrollPage({ orders, activeUser, users }: { orders: ServiceOrder[]; ac
           ))}
         </div>
       </section>}
+      {paymentDraft && (
+        <div className="manager-payment-modal-backdrop" onClick={() => setPaymentDraft(null)}>
+          <section className="manager-payment-modal manager-issue-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="panel-heading"><h2>Виплата інженеру</h2><span>{users.find((user) => user.id === paymentDraft.engineerId)?.name ?? paymentDraft.engineerId}</span></div>
+            <div className="manager-payment-modal-body">
+              <label className="manager-payment-field">
+                <span>Сума</span>
+                <input type="number" min={0} value={paymentDraft.amount} onChange={(event) => setPaymentDraft((current) => current ? { ...current, amount: event.target.value } : current)} />
+              </label>
+              <label className="manager-payment-field">
+                <span>Спосіб</span>
+                <select value={paymentDraft.method} onChange={(event) => setPaymentDraft((current) => current ? { ...current, method: event.target.value as 'наличка' | 'карта' } : current)}>
+                  <option value="наличка">Наличка</option>
+                  <option value="карта">Карта</option>
+                </select>
+              </label>
+              <label className="manager-payment-field">
+                <span>Коментар</span>
+                <input value={paymentDraft.comment} onChange={(event) => setPaymentDraft((current) => current ? { ...current, comment: event.target.value } : current)} />
+              </label>
+            </div>
+            <div className="action-row manager-payment-actions">
+              <button type="button" className="submit-button" onClick={submitEngineerPayment}>Підтвердити</button>
+              <button type="button" onClick={() => setPaymentDraft(null)}>Скасувати</button>
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   );
 }
