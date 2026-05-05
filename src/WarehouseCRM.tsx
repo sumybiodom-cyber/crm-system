@@ -12437,6 +12437,7 @@ function OrdersPage(props: {
   const [selectedPartProductId, setSelectedPartProductId] = useState('');
   const [selectedPartQty, setSelectedPartQty] = useState('1');
   const [managerActiveOrderId, setManagerActiveOrderId] = useState('');
+  const [isManagerOrderDetailOpen, setIsManagerOrderDetailOpen] = useState(false);
   const [managerPulseOrderId, setManagerPulseOrderId] = useState('');
   const [managerPaymentDrafts, setManagerPaymentDrafts] = useState<Record<string, { amount: string; type: SimpleLedgerPaymentKind; method: 'наличные' | 'карта' | 'перевод'; reason: string }>>({});
   const [managerPaymentModal, setManagerPaymentModal] = useState<null | { orderId: string; amount: string; due: number; method: 'наличные' | 'карта' | 'перевод' }>(null);
@@ -12604,12 +12605,19 @@ function OrdersPage(props: {
 
     const openManagerCreateMode = () => {
       resetManagerCreateDraft();
+      setIsManagerOrderDetailOpen(false);
       setShowManagerCreateForm(true);
     };
 
     const cancelManagerCreateMode = () => {
       resetManagerCreateDraft();
       setShowManagerCreateForm(false);
+    };
+
+    const openManagerOrderDetails = (orderId: string) => {
+      setManagerActiveOrderId(orderId);
+      props.setSelectedOrderId(orderId);
+      setIsManagerOrderDetailOpen(true);
     };
 
     const submitManagerPart = (orderId: string) => {
@@ -12725,8 +12733,7 @@ function OrdersPage(props: {
 
     const openManagerOrderFromSearch = (order: ServiceOrder) => {
       setManagerFilter('all');
-      setManagerActiveOrderId(order.id);
-      props.setSelectedOrderId(order.id);
+      openManagerOrderDetails(order.id);
       setManagerSearch(order.id);
       setShowManagerCreateForm(false);
       pulseManagerOrder(order.id);
@@ -13312,6 +13319,11 @@ function OrdersPage(props: {
             )}
           </section>
         )}
+        {!showManagerCreateForm && (
+          <button type="button" className="submit-button manager-floating-create" onClick={openManagerCreateMode}>
+            ➕ Нове замовлення
+          </button>
+        )}
 
         {showManagerCreateForm ? (
           <section className="panel manager-orders-create">
@@ -13370,96 +13382,57 @@ function OrdersPage(props: {
             </div>
           </section>
         ) : (
+        <>
         <div className="manager-orders-workspace">
-          <section className="panel manager-orders-list">
+          <section className="panel manager-orders-list manager-orders-list-full">
             <div className="panel-heading">
               <h2>{props.allRoleOrders ? 'Мої замовлення' : 'Всі замовлення'}</h2>
               <span>{managerVisibleOrders.length}</span>
             </div>
+            <div className="manager-orders-table-head">
+              <span>🧾 Замовлення</span>
+              <span>🖨 Пристрій</span>
+              <span>🔧 Статус</span>
+              <span>💰 Сума</span>
+              <span>❗ Борг</span>
+              <span>📅 Дата</span>
+            </div>
             <div className="manager-orders-list-body">
-              {([
-                { key: 'urgent', title: 'Срочні', tone: 'danger' },
-                { key: 'attention', title: 'Потребують уваги', tone: 'warning' },
-                { key: 'normal', title: 'Звичайні', tone: 'neutral' },
-              ] as const).map((group) => (
-                groupedManagerOrders[group.key].length > 0 && (
-                  <div key={group.key} className="manager-order-list-group">
-                    <div className={`manager-order-list-group-head manager-order-list-group-head-${group.tone}`}>
-                      <strong>{group.title}</strong>
-                      <span>{groupedManagerOrders[group.key].length}</span>
-                    </div>
-                    {groupedManagerOrders[group.key].map((order) => {
-                      const debtSnapshot = orderDebtSnapshot(order);
-                      const remainingForBadge = debtSnapshot.remainingDebt;
-                      const paidAmount = debtSnapshot.paid;
-                      const strictStatusLabel = strictManagerWorkflowStatus(order);
-                      const actionMeta = managerActionMeta(order);
-                      const actState = orderActStatus(order);
-                      const ageDays = statusAgeDays(order);
-                      const ageTone = managerAgeTone(order);
-                      return (
-                        <div
-                          key={order.id}
-                          className={`manager-order-list-row${managerActiveOrderId === order.id ? ' is-active' : ''}${actionMeta.signal === 'danger' ? ' is-problem' : actionMeta.signal === 'warning' ? ' is-warning' : actionMeta.signal === 'success' ? ' is-success' : ''}`}
-                          onClick={() => setManagerActiveOrderId(order.id)}
-                          role="button"
-                          tabIndex={0}
-                          onKeyDown={(event) => {
-                            if (event.key === 'Enter' || event.key === ' ') {
-                              event.preventDefault();
-                              setManagerActiveOrderId(order.id);
-                            }
-                          }}
-                        >
-                          <div className="manager-order-list-main">
-                            <div className="manager-order-list-top">
-                              <strong>{order.id}</strong>
-                              <span className={`manager-order-status-badge ${simpleRepairStatusClass(simpleRepairStatus(order.status))}`}>{strictStatusLabel}</span>
-                            </div>
-                            <div className="manager-order-list-client">{order.client}</div>
-                            <div className="manager-order-list-device">{order.device}</div>
-                            <div className="manager-order-list-issue">{order.issue}</div>
-                            <div className="manager-order-list-meta">
-                              <span>{order.engineer || 'Без інженера'}</span>
-                              <span>Сума {money(debtSnapshot.total)}</span>
-                              <span>Оплачено {money(paidAmount)}</span>
-                              <span>Борг {money(remainingForBadge)}</span>
-                              <span className={`manager-order-list-act manager-order-list-act-${actState.tone}`}>{actState.icon} {actState.label}</span>
-                              <span className={`manager-order-age manager-order-age-${ageTone}`}>⏱ {ageDays} {ageDays === 1 ? 'день' : ageDays < 5 ? 'дні' : 'днів'}</span>
-                            </div>
-                          </div>
-                          <div className="manager-order-list-side">
-                            <span className={`manager-order-hint ${actionMeta.signal === 'danger' ? 'manager-order-hint-danger' : actionMeta.signal === 'warning' ? 'manager-order-hint-warning' : actionMeta.signal === 'success' ? 'manager-order-hint-success' : 'manager-order-hint-neutral'}`}>{actionMeta.signalLabel}</span>
-                            {actionMeta.action ? (
-                              <button
-                                type="button"
-                                className="submit-button manager-order-list-action"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  actionMeta.action?.();
-                                  setManagerActiveOrderId(order.id);
-                                  pulseManagerOrder(order.id);
-                                }}
-                              >
-                                {actionMeta.actionLabel}
-                              </button>
-                            ) : (
-                              <span className="manager-order-list-reason">{actionMeta.reason}</span>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )
-              ))}
+              {managerVisibleOrders.map((order) => {
+                const debtSnapshot = orderDebtSnapshot(order);
+                const remainingForBadge = debtSnapshot.remainingDebt;
+                const strictStatusLabel = strictManagerWorkflowStatus(order);
+                const actionMeta = managerActionMeta(order);
+                return (
+                  <button
+                    type="button"
+                    key={order.id}
+                    className={`manager-order-list-row manager-order-compact-row${managerActiveOrderId === order.id && isManagerOrderDetailOpen ? ' is-active' : ''}${actionMeta.signal === 'danger' ? ' is-problem' : actionMeta.signal === 'warning' ? ' is-warning' : actionMeta.signal === 'success' ? ' is-success' : ''}`}
+                    onClick={() => openManagerOrderDetails(order.id)}
+                  >
+                    <span className="manager-order-cell manager-order-cell-id">{order.id}</span>
+                    <span className="manager-order-cell">{order.device}</span>
+                    <span className="manager-order-cell">
+                      <span className={`manager-order-status-badge ${simpleRepairStatusClass(simpleRepairStatus(order.status))}`}>{strictStatusLabel}</span>
+                    </span>
+                    <span className="manager-order-cell">{money(debtSnapshot.total)}</span>
+                    <span className={`manager-order-cell ${remainingForBadge > 0 ? 'manager-order-cell-debt' : ''}`}>{remainingForBadge > 0 ? money(remainingForBadge) : '—'}</span>
+                    <span className="manager-order-cell">{order.intakeDate}</span>
+                  </button>
+                );
+              })}
               {managerVisibleOrders.length === 0 && <div className="empty-state">Немає замовлень</div>}
             </div>
           </section>
-
-          <section className="panel manager-order-focus">
-            {!activeManagerOrder && <div className="empty-state">Оберіть замовлення зі списку.</div>}
-            {activeManagerOrder && (() => {
+        </div>
+        {isManagerOrderDetailOpen && activeManagerOrder && (
+          <div className="manager-order-modal-backdrop" onClick={() => setIsManagerOrderDetailOpen(false)}>
+            <section className="panel manager-order-focus manager-order-modal" onClick={(event) => event.stopPropagation()}>
+              <div className="panel-heading">
+                <h2>Замовлення {activeManagerOrder.id}</h2>
+                <button type="button" onClick={() => setIsManagerOrderDetailOpen(false)}>Закрити</button>
+              </div>
+            {(() => {
               const order = activeManagerOrder;
               const linkedContract = order.contractId ? props.contracts.find((contract) => contract.id === order.contractId) : undefined;
               const linkedAct = order.contractActId ? props.contractActs.find((act) => act.id === order.contractActId) : undefined;
@@ -13809,8 +13782,10 @@ function OrdersPage(props: {
                 </div>
               );
             })()}
-          </section>
-        </div>
+            </section>
+          </div>
+        )}
+        </>
         )}
 
         {managerPaymentModal && (

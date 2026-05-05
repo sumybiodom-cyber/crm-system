@@ -1254,10 +1254,7 @@ button {
 }
 
 .manager-orders-workspace {
-  display: grid;
-  grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
-  gap: 18px;
-  align-items: start;
+  display: block;
   min-height: 0;
 }
 
@@ -1266,12 +1263,27 @@ button {
   min-height: 0;
 }
 
+.manager-orders-list-full {
+  width: 100%;
+}
+
+.manager-orders-table-head {
+  display: grid;
+  grid-template-columns: 1.1fr 1.3fr 0.9fr 0.8fr 0.8fr 0.8fr;
+  gap: 12px;
+  padding: 0 10px 10px;
+  color: #6b7280;
+  font-size: 12px;
+  font-weight: 700;
+  border-bottom: 1px solid #e5e7eb;
+}
+
 .manager-orders-list-body {
   display: grid;
-  gap: 10px;
-  max-height: calc(100vh - 250px);
+  gap: 8px;
+  max-height: calc(100vh - 280px);
   overflow-y: auto;
-  padding-right: 4px;
+  padding: 10px 4px 0 0;
 }
 
 .manager-order-list-group {
@@ -1324,6 +1336,31 @@ button {
 
 .manager-order-list-row:hover {
   background: #f9fafb;
+}
+
+.manager-order-compact-row {
+  grid-template-columns: 1.1fr 1.3fr 0.9fr 0.8fr 0.8fr 0.8fr;
+  align-items: center;
+  padding: 10px 12px;
+}
+
+.manager-order-cell {
+  min-width: 0;
+  color: #1f2937;
+  font-size: 13px;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.manager-order-cell-id {
+  font-weight: 700;
+}
+
+.manager-order-cell-debt {
+  color: #dc2626;
+  font-weight: 700;
 }
 
 .manager-order-list-row.is-active {
@@ -1478,6 +1515,34 @@ button {
 
 .manager-order-focus-card {
   cursor: default;
+}
+
+.manager-order-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(15, 23, 42, 0.38);
+}
+
+.manager-order-modal {
+  width: min(1180px, 100%);
+  max-height: calc(100vh - 40px);
+  overflow: auto;
+  box-shadow: 0 20px 48px rgba(15, 23, 42, 0.22);
+}
+
+.manager-floating-create {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 35;
+  min-height: 44px;
+  padding: 10px 16px;
+  border-radius: 8px;
+  box-shadow: 0 18px 36px rgba(37, 99, 235, 0.24);
 }
 
 .manager-order-focus-layout {
@@ -3914,6 +3979,7 @@ button {
 
   .manager-orders-toolbar,
   .manager-orders-toolbar-filter,
+  .manager-orders-table-head,
   .manager-order-payment-grid,
   .manager-order-part-actions,
   .manager-order-part-row,
@@ -3942,6 +4008,11 @@ button {
   .manager-orders-toolbar-search {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .manager-floating-create {
+    right: 14px;
+    bottom: 14px;
   }
 
   .manager-order-pipeline-arrow {
