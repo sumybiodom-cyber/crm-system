@@ -3962,6 +3962,7 @@ function normalizeUserRecord(user: User): User {
   const defaultPermissions = defaultPermissionsForRole(user.role);
   return {
     ...user,
+    phone: user.phone ? normalizePhone(String(user.phone)) : undefined,
     permissions: {
       ...defaultPermissions,
       ...user.permissions,
@@ -4983,7 +4984,11 @@ useEffect(() => {
 
   function requestPhoneCode() {
     const normalized = normalizePhone(loginPhone);
-    const user = users.find((item) => normalizePhone(item.phone ?? '') === normalized);
+    const employees = loadEmployeesFromStorage();
+    const searchableEmployees = employees.length > 0 ? employees : users;
+    console.log('LOGIN employees', searchableEmployees);
+    console.log('LOGIN phone', normalized);
+    const user = searchableEmployees.find((item) => normalizePhone(item.phone ?? '') === normalized);
     if (!normalized) {
       setLoginError('Вкажіть телефон співробітника.');
       setLoginHint('');
