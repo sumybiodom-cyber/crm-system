@@ -1310,27 +1310,50 @@ button {
 
 .manager-order-list-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 150px;
-  gap: 12px;
+  grid-template-columns: minmax(0, 1.5fr) minmax(320px, 0.9fr);
+  gap: 16px;
   width: 100%;
-  padding: 10px 12px;
+  padding: 12px 14px;
   border: 1px solid #e5e7eb;
   border-left: 4px solid #e5e7eb;
   border-radius: 10px;
   background: #ffffff;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
   text-align: left;
-  transition: all 0.15s ease;
+  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
 }
 
 .manager-order-list-row:hover {
   background: #f5f7fa;
   cursor: pointer;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.08);
 }
 
 .manager-order-compact-row {
-  grid-template-columns: 1.1fr 1.3fr 0.9fr 0.8fr 0.8fr 0.8fr;
   align-items: center;
+}
+
+.manager-order-primary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.manager-order-primary-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.manager-order-secondary {
+  display: grid;
+  grid-template-columns: auto repeat(3, minmax(72px, auto));
+  gap: 14px;
+  align-items: center;
+  justify-content: end;
 }
 
 .manager-order-cell {
@@ -1338,40 +1361,49 @@ button {
   color: #1f2937;
   font-size: 13px;
   text-align: left;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.manager-order-cell-id {
-  font-weight: 700;
 }
 
 .manager-order-id-badge {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   min-height: 30px;
   padding: 4px 10px;
   border-radius: 8px;
   background: #f3f4f6;
   color: #111111;
   font-weight: 700;
-}
-
-.manager-order-cell-device {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+  white-space: nowrap;
 }
 
 .manager-order-device-icon {
   flex: 0 0 auto;
   font-size: 17px;
   line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: #f3f4f6;
 }
 
 .manager-order-device-text {
   min-width: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #111111;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.manager-order-client-text {
+  min-width: 0;
+  color: #6b7280;
+  font-size: 12px;
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -1380,10 +1412,27 @@ button {
   justify-self: start;
 }
 
+.manager-order-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  text-align: right;
+}
+
+.manager-order-metric-label {
+  color: #9ca3af;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
 .manager-order-cell-money,
 .manager-order-cell-date {
   text-align: right;
   justify-self: end;
+  white-space: nowrap;
 }
 
 .manager-order-cell-debt {
@@ -3885,6 +3934,17 @@ button {
   .manager-order-focus-layout,
   .manager-order-list-row {
     grid-template-columns: 1fr;
+  }
+
+  .manager-order-secondary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    justify-content: stretch;
+  }
+
+  .manager-order-metric,
+  .manager-order-cell-status {
+    text-align: left;
+    justify-self: start;
   }
 
   .manager-orders-grid {

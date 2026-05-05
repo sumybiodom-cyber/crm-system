@@ -13403,19 +13403,31 @@ function OrdersPage(props: {
                     className={`manager-order-list-row manager-order-compact-row${managerActiveOrderId === order.id && isManagerOrderDetailOpen ? ' is-active' : ''}${actionMeta.signal === 'danger' ? ' is-problem' : actionMeta.signal === 'warning' ? ' is-warning' : actionMeta.signal === 'success' ? ' is-success' : ''}`}
                     onClick={() => openManagerOrderDetails(order.id)}
                   >
-                    <span className="manager-order-cell manager-order-cell-id">
+                    <span className="manager-order-primary">
                       <span className="manager-order-id-badge">{order.id}</span>
-                    </span>
-                    <span className="manager-order-cell manager-order-cell-device">
                       <span className="manager-order-device-icon" aria-hidden="true">{deviceIcon(order.device)}</span>
-                      <span className="manager-order-device-text">{order.device}</span>
+                      <span className="manager-order-primary-copy">
+                        <span className="manager-order-device-text">{order.device}</span>
+                        <span className="manager-order-client-text">{order.client}</span>
+                      </span>
                     </span>
-                    <span className="manager-order-cell manager-order-cell-status">
-                      <span className={`manager-order-status-badge ${simpleRepairStatusClass(simpleRepairStatus(order.status))}`}>{strictStatusLabel}</span>
+                    <span className="manager-order-secondary">
+                      <span className="manager-order-cell manager-order-cell-status">
+                        <span className={`manager-order-status-badge ${simpleRepairStatusClass(simpleRepairStatus(order.status))}`}>{strictStatusLabel}</span>
+                      </span>
+                      <span className="manager-order-metric">
+                        <span className="manager-order-metric-label">Сума</span>
+                        <span className="manager-order-cell manager-order-cell-money">{money(debtSnapshot.total)}</span>
+                      </span>
+                      <span className="manager-order-metric">
+                        <span className="manager-order-metric-label">Борг</span>
+                        <span className={`manager-order-cell manager-order-cell-money ${remainingForBadge > 0 ? 'manager-order-cell-debt' : ''}`}>{remainingForBadge > 0 ? `● ${money(remainingForBadge)}` : '—'}</span>
+                      </span>
+                      <span className="manager-order-metric manager-order-metric-date">
+                        <span className="manager-order-metric-label">Дата</span>
+                        <span className="manager-order-cell manager-order-cell-date">{order.intakeDate}</span>
+                      </span>
                     </span>
-                    <span className="manager-order-cell manager-order-cell-money">{money(debtSnapshot.total)}</span>
-                    <span className={`manager-order-cell manager-order-cell-money ${remainingForBadge > 0 ? 'manager-order-cell-debt' : ''}`}>{remainingForBadge > 0 ? `● ${money(remainingForBadge)}` : '—'}</span>
-                    <span className="manager-order-cell manager-order-cell-date">{order.intakeDate}</span>
                   </button>
                 );
               })}
