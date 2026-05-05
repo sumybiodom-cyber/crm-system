@@ -2480,7 +2480,7 @@ const baseEmployeeRoles: Role[] = ['Адміністратор', 'Руковод
 const rolePageAccess: Record<Role, Page[]> = {
   Руководитель: navItems.map((item) => item.id),
   Адміністратор: navItems.map((item) => item.id),
-  Менеджер: ['clients', 'orders'],
+  Менеджер: ['dashboard', 'clients', 'orders'],
   Інженер: ['my-orders'],
   Комірник: ['parts', 'purchases', 'storage', 'movements'],
   Бухгалтер: ['finance', 'cash', 'documents', 'bank-import', 'reports', 'tax-invoices'],
@@ -4020,11 +4020,10 @@ function getInternalMessageAuthorRole(message: InternalMessage, users: User[]) {
 
 function navLabelForRole(page: Page, role: Role) {
   if (role === 'Менеджер') {
-    if (page === 'dashboard') return 'Рабочий стол';
-    if (page === 'orders') return 'Замовлення ремонту';
+    if (page === 'dashboard') return 'Головна';
     if (page === 'my-orders') return 'Мої замовлення';
-    if (page === 'clients') return 'Клиенты';
-    if (page === 'cash') return 'Оплата и касса';
+    if (page === 'clients') return 'Клієнти';
+    if (page === 'cash') return 'Оплати / Каса';
     if (page === 'problem-clients') return 'Контроль';
   }
   if (role === 'Інженер') {
@@ -4162,7 +4161,7 @@ function buildServiceProblems(orders: ServiceOrder[], documents: PrintDocument[]
 function defaultPageForUser(user: User): Page {
   if (user.role === 'Адміністратор') return 'dashboard';
   if (user.role === 'Руководитель') return 'dashboard';
-  if (user.role === 'Менеджер') return 'orders';
+  if (user.role === 'Менеджер') return 'dashboard';
   if (user.role === 'Інженер') return 'my-orders';
   if (user.role === 'Бухгалтер') return 'finance';
   if (user.role === 'Комірник' || user.role === 'Закупник') return 'parts';
@@ -5095,7 +5094,9 @@ useEffect(() => {
   const isOwnerControlView = sessionUser?.role === 'Руководитель' && activeUser.id !== sessionUser.id;
   const canViewPage = (targetPage: Page) => canRoleViewPage(viewUser, targetPage);
   const canDo = (permission: Permission) => roleFinePermissions[viewUser.role].includes(permission) || hasPermissionOverride(viewUser, permission);
-  const visibleNavItems = navItems.filter((item) => canViewPage(item.id));
+  const visibleNavItems = navItems
+    .filter((item) => canViewPage(item.id))
+    .filter((item) => !(viewUser.role === 'Менеджер' && item.id === 'orders'));
   const hideGlobalSearch = viewUser.role === 'Менеджер' && (page === 'orders' || page === 'my-orders');
   const repairOrders = filteredOrders;
   const engineerOwnOrders = viewUser.role === 'Інженер' ? orders.filter((order) => getEngineerAssignedUserId(order, users) === viewUser.id) : orders;
@@ -9545,7 +9546,7 @@ useEffect(() => {
                     const nextRole = event.target.value as Role;
                     setAdminPreviewRole(nextRole);
                     setAdminPreviewUserId('');
-                    if (nextRole === 'Менеджер') setPage('orders');
+                    if (nextRole === 'Менеджер') setPage('dashboard');
                   }}
                   aria-label="Режим перегляду CRM за роллю"
                 >
@@ -9620,7 +9621,115 @@ useEffect(() => {
         <ToastStack toasts={toasts} onDismiss={(id) => setToasts((current) => current.filter((toast) => toast.id !== id))} />
 
         {!canViewPage(page) && <AccessDenied activeUser={viewUser} page={page} />}
-        {canViewPage(page) && page === 'dashboard' && (
+        {canViewPage(page) && page === 'dashboard' && viewUser.role === 'Менеджер' && (
+          <OrdersPage
+            orders={repairOrders}
+            allOrders={orders}
+            selectedOrder={selectedRepairOrder}
+            products={products}
+            selectedOrderId={selectedOrderId}
+            setSelectedOrderId={setSelectedOrderId}
+            selectedProductId={selectedProductId}
+            setSelectedProductId={setSelectedProductId}
+            qty={qty}
+            setQty={setQty}
+            quickPhone={quickPhone}
+            quickClientDebtWarning={quickClientDebtWarning}
+            quickClientName={quickClientName}
+            quickDevice={quickDevice}
+            quickSerial={quickSerial}
+            quickProblem={quickProblem}
+            quickAppearance={quickAppearance}
+            quickEstimatedAmount={quickEstimatedAmount}
+            quickEngineerId={quickEngineerId}
+            quickContractId={quickContractId}
+            quickLocationCode={quickLocationCode}
+            quickComment={quickComment}
+            users={users}
+            contracts={contracts}
+            contractActs={contractActs}
+            bankImportItems={bankImportItems}
+            setQuickPhone={handleQuickPhoneChange}
+            setQuickClientName={setQuickClientName}
+            setQuickDevice={setQuickDevice}
+            setQuickSerial={setQuickSerial}
+            setQuickProblem={setQuickProblem}
+            setQuickAppearance={setQuickAppearance}
+            setQuickEstimatedAmount={setQuickEstimatedAmount}
+            setQuickEngineerId={setQuickEngineerId}
+            setQuickContractId={setQuickContractId}
+            setQuickLocationCode={setQuickLocationCode}
+            setQuickComment={setQuickComment}
+            createQuickOrder={createQuickOrder}
+            patchSimpleManagerOrder={patchSimpleManagerOrder}
+            updateSimpleManagerOrderStatus={updateSimpleManagerOrderStatus}
+            editSimpleManagerOrder={editSimpleManagerOrder}
+            addSimpleManagerOrderPart={addSimpleManagerOrderPart}
+            removeSimpleManagerOrderPart={removeSimpleManagerOrderPart}
+            acceptSimpleManagerPayment={acceptSimpleManagerPayment}
+            confirmSimpleManagerPayment={confirmBankPayment}
+            accountSimpleManagerOrderToContract={accountSimpleManagerOrderToContract}
+            customerList={customerList}
+            addPartToRepair={addPartToRepair}
+            orderPart={orderPart}
+            reserveArrived={reserveArrived}
+            issueToEngineer={issueToEngineer}
+            markInstalled={markInstalled}
+            returnServicePart={returnServicePart}
+            addOrderPayment={addOrderPayment}
+            changeOrderStatus={changeOrderStatus}
+            acceptOrderWork={acceptOrderWork}
+            returnOrderToCellReady={returnOrderToCellReady}
+            reassignEngineer={reassignEngineer}
+            closeOrder={closeOrder}
+            issueReadyOrder={issueReadyOrder}
+            oneClickManagerIssue={oneClickManagerIssue}
+            transferOrderToBas={transferOrderToBas}
+            printDocument={printDocument}
+            createServiceOrderDocument={createServiceOrderDocument}
+            printServiceOrderDocument={printServiceOrderDocument}
+            documents={documents}
+            taxInvoices={taxInvoices}
+            notifications={clientNotifications.filter((item) => item.orderId === selectedRepairOrder.id)}
+            allNotifications={clientNotifications}
+            orderUnits={orderUnits}
+            warehouseLocations={warehouseLocations}
+            orderMovementLogs={orderMovementLogs}
+            moveOrder={moveOrder}
+            sendClientNotification={enqueueClientNotification}
+            createNotificationDraft={createNotificationDraft}
+            approval={repairApprovals.find((item) => item.orderId === selectedRepairOrder.id)}
+            sendRepairApproval={sendRepairApproval}
+            recordApprovalResponse={recordApprovalResponse}
+            markApprovalNoAnswer={markApprovalNoAnswer}
+            logRiskConfirmation={logRiskConfirmation}
+            ensureOrderDocumentRecord={ensureOrderDocumentRecord}
+            logOrderDocumentPrint={logOrderDocumentPrint}
+            signOrderAct={signOrderAct}
+            createTaxInvoiceForOrder={createTaxInvoiceForOrder}
+            registerTaxInvoice={registerTaxInvoice}
+            markEngineerWorkCompleted={markEngineerWorkCompleted}
+            cancelOrder={cancelOrder}
+            refundOrder={refundOrder}
+            cancelOrderAct={cancelOrderAct}
+            reopenOrder={reopenOrder}
+            openClientRecord={(phone, search) => {
+              setGlobalFocusedClientPhone(phone);
+              setGlobalClientSearch(search ?? '');
+              stayOnCurrentPage();
+            }}
+            orderVersions={orderVersions}
+            suggestedDocumentAction={suggestedDocumentAction}
+            clearSuggestedDocumentAction={() => setSuggestedDocumentAction(null)}
+            dashboardFocus={dashboardFocus}
+            clearDashboardFocus={() => setDashboardFocus(null)}
+            notifyUser={setNotice}
+            canDo={canDo}
+            showCost={canDo('cost.view')}
+            activeUser={viewUser}
+          />
+        )}
+        {canViewPage(page) && page === 'dashboard' && viewUser.role !== 'Менеджер' && (
           <Dashboard
             analytics={analytics}
             orders={orders}
