@@ -3057,6 +3057,14 @@ function restoreBatchAllocations(product: Product, allocations: BatchAllocation[
   });
 }
 
+function stockMovementTypeLabel(movement: StockMovement) {
+  if (movement.type === 'Списання' && movement.orderId) return 'Списання в замовлення';
+  if (movement.type === 'Повернення') return 'Повернення';
+  if (movement.type === 'Коригування') return 'Коригування';
+  if (movement.type === 'Прихід') return 'Прихід';
+  return movement.type;
+}
+
 function saleTotals(sale: Sale) {
   const activeItems = sale.items.filter((item) => item.status !== 'Скасовано');
   const sum = activeItems.reduce((total, item) => total + item.price * item.qty, 0);
@@ -5925,7 +5933,7 @@ useEffect(() => {
     }
     if (!ensureOrderEditable(targetOrder, 'Додавання деталі')) return;
     if (available(targetProduct) < requestedQty) {
-      setNotice(`Недостатньо залишку для "${targetProduct.name}".`);
+      setNotice('Недостатньо товару на складі');
       return;
     }
     const fifo = fifoConsumeBatches(targetProduct, requestedQty);
@@ -5973,10 +5981,10 @@ useEffect(() => {
       batchRefs: fifo.allocations.map((item) => `${item.batchId} x${item.qty}`).join(', '),
       unitPrice: requestedQty > 0 ? Math.round(fifo.totalCost / requestedQty) : 0,
       totalAmount: fifo.totalCost,
-      comment: `Списано в ремонт по FIFO: ${fifo.allocations.map((item) => `${item.batchId} x${item.qty}`).join(', ')}.`,
+      comment: `Автоматичне списання в замовлення ${orderId}: ${fifo.allocations.map((item) => `${item.batchId} x${item.qty}`).join(', ')}.`,
     });
-    logAction('Списання в ремонт', orderId, `${targetProduct.name} · ${requestedQty} шт. · FIFO ${fifo.allocations.map((item) => `${item.batchId}/${item.qty}`).join(', ')}.`);
-    setNotice(`Деталь "${targetProduct.name}" додано до ${orderId}.`);
+    logAction('Списання в замовлення', orderId, `${targetProduct.name} · ${requestedQty} шт. · FIFO ${fifo.allocations.map((item) => `${item.batchId}/${item.qty}`).join(', ')}.`);
+    setNotice(`Деталь "${targetProduct.name}" додано до ${orderId}. Склад списано автоматично.`);
   }
 
   function removeSimpleManagerOrderPart(orderId: string, partId: string, reason?: string, comment?: string) {
@@ -6025,7 +6033,7 @@ useEffect(() => {
       batchRefs: targetPart.batchAllocations?.map((item) => `${item.batchId} x${item.qty}`).join(', '),
       unitPrice: targetPart.cost,
       totalAmount: targetPart.cost * targetPart.qty,
-      comment: `Деталь повернено з ремонту назад у складські партії.${detailText ? ` ${detailText}.` : ''}`,
+      comment: `Автоматичне повернення з замовлення ${orderId} у складські партії.${detailText ? ` ${detailText}.` : ''}`,
     });
     logAction('Повернення деталі на склад', orderId, `${products.find((product) => product.id === targetPart.productId)?.name ?? targetPart.productId} · ${targetPart.qty} шт.${detailText ? ` · ${detailText}` : ''}`);
     setNotice(`Деталь повернуто на склад із ${orderId}.`);
@@ -8787,6 +8795,50 @@ useEffect(() => {
       if (!window.confirm(`Скасувати замовлення ${order.id}? Історія не буде видалена.`)) return;
     }
     const auditDetail = [reasonText ? `Причина: ${reasonText}` : 'Причина не вказана', commentText].filter(Boolean).join(' · ');
+    if (order.parts.length > 0) {
+      const returnedParts = order.parts;
+      const updatedProducts = products.map((product) => {
+        const linkedParts = returnedParts.filter((part) => part.productId === product.id);
+        if (linkedParts.length === 0) return product;
+        const restoredBatches = linkedParts.reduce((batches, part) => (
+          part.batchAllocations ? restoreBatchAllocations({ ...product, batches }, part.batchAllocations) : batches
+        ), product.batches);
+        const totalQty = linkedParts.reduce((sum, part) => sum + part.qty, 0);
+        return {
+          ...product,
+          stock: product.stock + totalQty,
+          installed: Math.max(product.installed - totalQty, 0),
+          batches: restoredBatches,
+        };
+      });
+      saveProductsToStorage(updatedProducts);
+      setProducts(updatedProducts);
+      persistOrdersUpdate((current) => current.map((item) => (
+        item.id === order.id
+          ? {
+              ...item,
+              parts: [],
+              activityLog: [
+                { id: uid('ACT'), date: today, action: 'Повернення запчастин при скасуванні', detail: returnedParts.map((part) => `${productName(part.productId)} · ${part.qty}`).join(', ') },
+                ...(item.activityLog ?? []),
+              ],
+            }
+          : item
+      )));
+      returnedParts.forEach((part) => {
+        addMovement({
+          type: 'Повернення',
+          productId: part.productId,
+          qty: part.qty,
+          orderId: order.id,
+          basis: order.id,
+          batchRefs: part.batchAllocations?.map((item) => `${item.batchId} x${item.qty}`).join(', '),
+          unitPrice: part.cost,
+          totalAmount: part.cost * part.qty,
+          comment: `Замовлення скасовано. Запчастину повернено на склад автоматично.`,
+        });
+      });
+    }
     createOrderVersion(order, `Скасування замовлення${reasonText ? `: ${reasonText}` : ''}`);
     updateOrderStatus(order.id, 'Скасовано', `Замовлення скасовано окремою дією.${auditDetail ? ` ${auditDetail}.` : ''}`);
     appendSimpleOrderActivity(order.id, 'Замовлення скасовано', auditDetail);
@@ -15786,7 +15838,7 @@ function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations,
         </div>
       </section>}
       {canShowPartsSection && <div className="panel-heading parts-heading">
-        <h2>{isEngineerRole ? 'Запчасти и работы' : 'Запчасти в ремонте'}</h2>
+        <h2>{isEngineerRole ? 'Запчастини / матеріали' : 'Запчастини / матеріали'}</h2>
         {!canShowManagerView && !canShowReadonlyOverview && canDo('repairs.close') && <button className="primary-action" type="button" onClick={() => issueReadyOrder(selectedOrder)} disabled={!selectedOrder.locationCode || selectedOrder.locationStatus === 'У інженера'}>Закрити і видати</button>}
       </div>}
       {canShowPartsSection && canAddParts && (
@@ -16062,9 +16114,9 @@ function PartsPage({ products, requirements, receipts, movements, productName, s
 
   function getStockTone(product: Product) {
     const free = available(product);
-    if (free < Math.max(product.min, 1)) return { tone: 'danger' as const, label: 'Нижче мінімуму' };
-    if (free <= Math.max(product.min + 2, 3)) return { tone: 'warning' as const, label: 'Мало' };
-    return { tone: 'normal' as const, label: 'Норма' };
+    if (free <= 0) return { tone: 'danger' as const, label: 'Немає в наявності' };
+    if (free < Math.max(product.min, 1)) return { tone: 'warning' as const, label: 'Мало' };
+    return { tone: 'normal' as const, label: 'Є в наявності' };
   }
 
   function submitIntake() {
@@ -17665,12 +17717,12 @@ function MovementsPage({ movements, productName }: { movements: StockMovement[];
     <div className="page-grid">
       <PageTitle eyebrow="Рух складу" title="Повна історія змін залишків" text="Кожна операція має тип, дату, запчастину, кількість і зв'язок із ремонтом або закупівлею." />
       <section className="panel">
-        <div className="table movement-table">
+          <div className="table movement-table">
           <div className="table-row table-head"><span>Дата</span><span>Тип</span><span>Запчастина</span><span>К-сть</span><span>Партія</span><span>Ціна</span><span>Документ</span><span>Підстава</span><span>Хто</span><span>Коментар</span></div>
           {movements.map((movement) => (
             <div className="table-row" key={movement.id}>
               <span>{movement.date}</span>
-              <span>{movement.type}</span>
+              <span>{stockMovementTypeLabel(movement)}</span>
               <span>{productName(movement.productId)}</span>
               <span>{movement.qty}</span>
               <span>{movement.batchRefs ?? '—'}</span>
