@@ -273,6 +273,7 @@ type ServiceWork = {
 type ServiceOrder = {
   id: string;
   groupId?: string;
+  assignedTo?: string;
   qrUrl: string;
   client: string;
   phone: string;
@@ -3994,8 +3995,12 @@ function canRoleViewPage(user: User, targetPage: Page) {
   return hasAccess(user.role, targetPage);
 }
 
+function getManagerUserId(order: ServiceOrder, users: User[]) {
+  return users.find((user) => user.role === 'Менеджер' && user.name === order.manager)?.id ?? '';
+}
+
 function getEngineerAssignedUserId(order: ServiceOrder, users: User[]) {
-  return users.find((user) => user.role === 'Інженер' && user.name === order.engineer)?.id ?? '';
+  return order.assignedTo ?? users.find((user) => user.role === 'Інженер' && user.name === order.engineer)?.id ?? '';
 }
 
 function navLabelForRole(page: Page, role: Role) {
@@ -4539,13 +4544,10 @@ useEffect(() => {
   const activeUserRecord = users.find((user) => user.id === activeUserId) ?? sessionUserRecord;
   const autoLoginUser = users.find((user) => user.role === 'Адміністратор') ?? users[0] ?? buildTemporaryAutoAdmin();
   const hookSafeUser = activeUserRecord ?? sessionUserRecord ?? SYSTEM_USER;
-  const hookSafeVisibleOrders = hookSafeUser.role === 'Інженер'
-    ? orders.filter((order) => getEngineerAssignedUserId(order, users) === hookSafeUser.id && !['Готовий до видачі', 'Не підлягає ремонту', 'Видано', 'Закрито', 'Скасовано'].includes(order.status))
-    : orders;
   const filteredOrders = (() => {
     const needle = query.trim();
-    if (!needle) return hookSafeVisibleOrders;
-    return hookSafeVisibleOrders.filter((order) => matchesOrderSearch(order, needle));
+    if (!needle) return orders;
+    return orders.filter((order) => matchesOrderSearch(order, needle));
   })();
   const globalClientMatches = query.trim()
     ? customerList.filter((client) => matchesClientSearch(client, query))
@@ -5170,15 +5172,18 @@ useEffect(() => {
   const canDo = (permission: Permission) => roleFinePermissions[viewUser.role].includes(permission);
   const visibleNavItems = navItems.filter((item) => canViewPage(item.id));
   const hideGlobalSearch = viewUser.role === 'Менеджер' && (page === 'orders' || page === 'my-orders');
+  const repairOrders = filteredOrders;
   const engineerOwnOrders = viewUser.role === 'Інженер' ? orders.filter((order) => getEngineerAssignedUserId(order, users) === viewUser.id) : orders;
-  const managerOwnOrders = viewUser.role === 'Менеджер' ? orders.filter((order) => order.manager === viewUser.name) : orders;
+  const managerOwnOrders = viewUser.role === 'Менеджер' ? orders.filter((order) => getManagerUserId(order, users) === viewUser.id || order.manager === viewUser.name) : orders;
   const engineerHiddenAfterReady: OrderStatus[] = ['Готовий до видачі', 'Не підлягає ремонту', 'Видано', 'Закрито', 'Скасовано'];
-  const visibleOrders = viewUser.role === 'Інженер'
+  const myOrders = viewUser.role === 'Інженер'
     ? engineerOwnOrders.filter((order) => !engineerHiddenAfterReady.includes(order.status))
     : viewUser.role === 'Менеджер'
       ? managerOwnOrders
-    : orders;
-  const selectedOrder = visibleOrders.find((order) => order.id === selectedOrderId) ?? visibleOrders[0] ?? (viewUser.role === 'Інженер' ? engineerOwnOrders[0] : viewUser.role === 'Менеджер' ? managerOwnOrders[0] : orders[0]) ?? orders[0];
+      : orders;
+  const selectedRepairOrder = repairOrders.find((order) => order.id === selectedOrderId) ?? repairOrders[0] ?? orders[0];
+  const selectedMyOrder = myOrders.find((order) => order.id === selectedOrderId) ?? myOrders[0] ?? selectedRepairOrder;
+  const selectedOrder = page === 'my-orders' ? selectedMyOrder : selectedRepairOrder;
   const selectedSale = sales.find((sale) => sale.id === selectedSaleId) ?? sales[0];
   const visibleInternalMessages = viewUser.role === 'Руководитель'
     ? internalMessages
@@ -5746,6 +5751,7 @@ useEffect(() => {
             client: trimmedClient,
             device: trimmedDevice,
             issue: trimmedIssue,
+            assignedTo: engineer.id,
             engineer: engineer.name,
             estimatedAmount: Number.isFinite(estimatedAmount) && estimatedAmount > 0 ? estimatedAmount : undefined,
           }
@@ -6080,6 +6086,7 @@ useEffect(() => {
       intakeComment: quickComment.trim() || undefined,
       estimatedAmount: Number.isFinite(estimatedAmount) && estimatedAmount > 0 ? estimatedAmount : undefined,
       contractId: selectedContract?.id,
+      assignedTo: engineer?.id,
       engineer: engineer?.name ?? '',
       manager: activeUser.name,
       legalEntity: Boolean(selectedContract),
@@ -8743,7 +8750,7 @@ useEffect(() => {
     const currentIndex = engineers.findIndex((user) => user.name === order.engineer);
     const nextEngineer = engineers[(currentIndex + 1) % engineers.length] ?? engineers[0];
     if (!nextEngineer) return;
-    setOrders((current) => current.map((item) => (item.id === order.id ? { ...item, engineer: nextEngineer.name, engineerAcceptedAt: undefined } : item)));
+    setOrders((current) => current.map((item) => (item.id === order.id ? { ...item, assignedTo: nextEngineer.id, engineer: nextEngineer.name, engineerAcceptedAt: undefined } : item)));
     prependActionLog({ id: uid('LOG'), date: today, user: activeUser.name, role: activeUser.role, action: 'Зміна інженера', entity: order.id, comment: `${order.engineer} -> ${nextEngineer.name}` });
     setNotice(`${order.id}: інженера змінено на ${nextEngineer.name}.`);
   }
@@ -9741,9 +9748,9 @@ useEffect(() => {
         )}
         {canViewPage(page) && page === 'orders' && (
           <OrdersPage
-            orders={filteredOrders}
+            orders={repairOrders}
             allOrders={orders}
-            selectedOrder={selectedOrder}
+            selectedOrder={selectedRepairOrder}
             products={products}
             selectedOrderId={selectedOrderId}
             setSelectedOrderId={setSelectedOrderId}
@@ -9808,7 +9815,7 @@ useEffect(() => {
             printServiceOrderDocument={printServiceOrderDocument}
             documents={documents}
             taxInvoices={taxInvoices}
-            notifications={clientNotifications.filter((item) => item.orderId === selectedOrder.id)}
+            notifications={clientNotifications.filter((item) => item.orderId === selectedRepairOrder.id)}
             allNotifications={clientNotifications}
             orderUnits={orderUnits}
             warehouseLocations={warehouseLocations}
@@ -9816,7 +9823,7 @@ useEffect(() => {
             moveOrder={moveOrder}
             sendClientNotification={enqueueClientNotification}
             createNotificationDraft={createNotificationDraft}
-            approval={repairApprovals.find((item) => item.orderId === selectedOrder.id)}
+            approval={repairApprovals.find((item) => item.orderId === selectedRepairOrder.id)}
             sendRepairApproval={sendRepairApproval}
             recordApprovalResponse={recordApprovalResponse}
             markApprovalNoAnswer={markApprovalNoAnswer}
@@ -9849,12 +9856,12 @@ useEffect(() => {
         )}
         {canViewPage(page) && page === 'my-orders' && (
           <OrdersPage
-            orders={visibleOrders}
+            orders={myOrders}
             allOrders={orders}
             allRoleOrders={viewUser.role === 'Менеджер' ? managerOwnOrders : engineerOwnOrders}
-            selectedOrder={selectedOrder}
+            selectedOrder={selectedMyOrder}
             products={products}
-            selectedOrderId={selectedOrder.id}
+            selectedOrderId={selectedMyOrder.id}
             setSelectedOrderId={setSelectedOrderId}
             selectedProductId={selectedProductId}
             setSelectedProductId={setSelectedProductId}
@@ -9912,7 +9919,7 @@ useEffect(() => {
             printServiceOrderDocument={printServiceOrderDocument}
             documents={documents}
             taxInvoices={taxInvoices}
-            notifications={clientNotifications.filter((item) => item.orderId === selectedOrder.id)}
+            notifications={clientNotifications.filter((item) => item.orderId === selectedMyOrder.id)}
             allNotifications={clientNotifications}
             orderUnits={orderUnits}
             warehouseLocations={warehouseLocations}
@@ -9920,7 +9927,7 @@ useEffect(() => {
             moveOrder={moveOrder}
             sendClientNotification={enqueueClientNotification}
             createNotificationDraft={createNotificationDraft}
-            approval={repairApprovals.find((item) => item.orderId === selectedOrder.id)}
+            approval={repairApprovals.find((item) => item.orderId === selectedMyOrder.id)}
             sendRepairApproval={sendRepairApproval}
             recordApprovalResponse={recordApprovalResponse}
             markApprovalNoAnswer={markApprovalNoAnswer}
