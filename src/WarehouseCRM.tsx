@@ -223,6 +223,7 @@ type SimpleOrderPaymentRecord = {
   date: string;
   createdAt?: string;
   userId?: string;
+  orderNumber?: string;
   currency?: string;
   payer?: string;
   taxId?: string;
@@ -262,6 +263,11 @@ type OrderPart = {
 };
 
 type WorkAccrualType = 'percent_of_work_amount' | 'fixed_per_unit';
+type EngineerSalaryType = 'percentage' | 'piece_rate';
+type EngineerPieceRate = {
+  operationName: string;
+  rate: number;
+};
 type ServiceWork = {
   name: string;
   serviceType: string;
@@ -905,6 +911,9 @@ type User = {
   email?: string;
   authMode: AuthMode;
   password?: string;
+  salaryType?: EngineerSalaryType;
+  engineerPercent?: number;
+  pieceRates?: EngineerPieceRate[];
   permissions: UserPermissions;
   session: 'Активна' | 'Примусовий вихід' | 'Заблокована';
 };
@@ -2002,6 +2011,15 @@ const payrollRules: PayrollRule[] = [
   { employee: 'Вікторія Данилюк', role: 'Адміністратор', type: 'Фіксована ставка', monthlyRate: 18000, bonus: 1500 },
 ];
 
+const defaultEngineerPieceRates: EngineerPieceRate[] = [
+  { operationName: 'Заправка картриджа', rate: 30 },
+  { operationName: 'Регенерация картриджа', rate: 50 },
+  { operationName: 'Замена барабана', rate: 40 },
+  { operationName: 'Замена ракеля', rate: 35 },
+  { operationName: 'Замена чипа', rate: 25 },
+  { operationName: 'Чистка картриджа', rate: 20 },
+];
+
 const EMPLOYEES_STORAGE_KEY = 'crm_employees';
 const CLIENTS_STORAGE_KEY = 'crm_clients';
 const PRODUCTS_STORAGE_KEY = 'crm_products';
@@ -2225,6 +2243,7 @@ function loadSimplePaymentsFromStorage(): SimpleOrderPaymentRecord[] {
           date: payment.date ?? today,
           createdAt: payment.createdAt ?? payment.date ?? today,
           userId: typeof payment.userId === 'string' ? payment.userId : undefined,
+          orderNumber: typeof payment.orderNumber === 'string' ? payment.orderNumber : (payment.orderId ?? payment.entityId ?? ''),
           currency: payment.currency,
           payer: payment.payer,
           taxId: normalizeTaxId(payment.taxId),
@@ -3445,6 +3464,63 @@ function workTypeLabel(work: ServiceWork): SimpleWorkType {
   return 'Ремонт техники';
 }
 
+function inferPieceOperationName(work: ServiceWork): string {
+  const source = `${work.name} ${work.serviceType}`.toLowerCase();
+  if (source.includes('регенерац')) return 'Регенерация картриджа';
+  if (source.includes('заправ')) return 'Заправка картриджа';
+  if (source.includes('барабан')) return 'Замена барабана';
+  if (source.includes('ракел')) return 'Замена ракеля';
+  if (source.includes('чип')) return 'Замена чипа';
+  if (source.includes('чист')) return 'Чистка картриджа';
+  return work.name;
+}
+
+function getEngineerCompensationProfile(engineerName: string, users?: User[]) {
+  const employee = users?.find((item) => item.name === engineerName);
+  const fallbackRule = payrollRules.find((item) => item.employee === engineerName);
+  const salaryType: EngineerSalaryType = employee?.salaryType ?? (fallbackRule?.type === 'За штуку' ? 'piece_rate' : 'percentage');
+  const engineerPercent = employee?.engineerPercent ?? fallbackRule?.percent ?? 40;
+  const pieceRates = employee?.pieceRates?.length ? employee.pieceRates : defaultEngineerPieceRates;
+  return { employee, salaryType, engineerPercent, pieceRates };
+}
+
+function calculateEngineerWorkCompensation(order: ServiceOrder, work: ServiceWork, users?: User[]) {
+  const employeeName = work.engineer ?? order.engineer;
+  const qty = work.qty ?? 1;
+  const laborAmount = orderWorkAmount(work);
+  const workType = workTypeLabel(work);
+  const operationName = inferPieceOperationName(work);
+  const profile = getEngineerCompensationProfile(employeeName, users);
+  if (profile.salaryType === 'piece_rate') {
+    const matchedRate = profile.pieceRates.find((item) => item.operationName === operationName)?.rate
+      ?? work.payrollFixedPerUnit
+      ?? 0;
+    return {
+      employee: employeeName,
+      salaryType: profile.salaryType,
+      engineerPercent: profile.engineerPercent,
+      qty,
+      laborAmount,
+      workType,
+      operationName,
+      rateLabel: `${money(matchedRate)} / шт.`,
+      earning: Math.round(matchedRate * qty),
+    };
+  }
+  const percent = work.payrollPercent ?? profile.engineerPercent;
+  return {
+    employee: employeeName,
+    salaryType: profile.salaryType,
+    engineerPercent: percent,
+    qty,
+    laborAmount,
+    workType,
+    operationName,
+    rateLabel: `${percent}%`,
+    earning: Math.round(laborAmount * (percent / 100)),
+  };
+}
+
 function workRateLabel(work: ServiceWork, rule?: PayrollRule) {
   if (work.accrualType === 'fixed_per_unit') return `${money(work.payrollFixedPerUnit ?? 0)} / шт.`;
   return `${work.payrollPercent ?? rule?.percent ?? 0}%`;
@@ -3967,9 +4043,14 @@ function defaultPermissionsForRole(role: Role): UserPermissions {
 
 function normalizeUserRecord(user: User): User {
   const defaultPermissions = defaultPermissionsForRole(user.role);
+  const defaultSalaryType: EngineerSalaryType | undefined = user.role === 'Інженер' ? 'percentage' : undefined;
+  const defaultEngineerPercent = user.role === 'Інженер' ? 40 : undefined;
   return {
     ...user,
     phone: user.phone ? normalizePhone(String(user.phone)) : undefined,
+    salaryType: user.salaryType ?? defaultSalaryType,
+    engineerPercent: user.engineerPercent ?? defaultEngineerPercent,
+    pieceRates: user.pieceRates?.length ? user.pieceRates : (user.role === 'Інженер' ? defaultEngineerPieceRates.map((item) => ({ ...item })) : undefined),
     permissions: {
       ...defaultPermissions,
       ...user.permissions,
@@ -5867,6 +5948,7 @@ useEffect(() => {
       date: today,
       createdAt: today,
       userId: activeUser.id,
+      orderNumber: targetOrder.id,
       acceptedBy: activeUser.name,
       cashShiftId: paymentType === 'перевод' ? undefined : cashShift.id,
       countedAtShiftId: paymentType === 'перевод' ? undefined : cashShift.id,
@@ -6426,6 +6508,7 @@ useEffect(() => {
       date: row.date || today,
       createdAt: row.date || today,
       userId: activeUser.id,
+      orderNumber: candidate.kind === 'order' ? candidate.entityId : (candidate.backingEntityId ?? candidate.entityId),
       currency: row.currency,
       payer: row.payer,
       taxId: normalizeTaxId(row.taxId),
@@ -8622,6 +8705,7 @@ useEffect(() => {
       date: today,
       createdAt: today,
       userId: activeUser.id,
+      orderNumber: order.id,
       direction: 'outgoing',
       purpose: [reasonText || 'Повернення коштів', commentText].filter(Boolean).join(' · '),
     };
@@ -9329,6 +9413,7 @@ useEffect(() => {
         date: today,
         createdAt: today,
         userId: activeUser.id,
+        orderNumber: sale.id,
         purpose: comment,
         acceptedBy: activeUser.name,
         cashShiftId: method === 'Безготівка' ? undefined : cashShift.id,
@@ -10172,7 +10257,7 @@ useEffect(() => {
           />
         )}
         {canViewPage(page) && page === 'reports' && <ReportsPage orders={orders} sales={sales} purchases={purchases} receipts={receipts} movements={movements} products={products} actionLogs={actionLogs} cashShift={cashShift} canDo={canDo} exportAccounting={exportAccounting} />}
-        {canViewPage(page) && page === 'payroll' && <PayrollPage orders={orders} activeUser={viewUser} />}
+        {canViewPage(page) && page === 'payroll' && <PayrollPage orders={orders} activeUser={viewUser} users={users} />}
         {canViewPage(page) && page === 'acceptance' && <AcceptanceChecklistPage />}
         {canViewPage(page) && page === 'team' && <TeamPage users={users} setUsers={setUsers} activeUser={viewUser} />}
         {canViewPage(page) && page === 'settings' && (
@@ -14820,21 +14905,25 @@ function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations,
     labelWindow.print();
   };
   const workCompensationRows = selectedOrder.works.map((work, index) => {
-    const employee = work.engineer ?? selectedOrder.engineer;
-    const rule = payrollRules.find((item) => item.employee === employee);
-    const qty = work.qty ?? 1;
+    const compensation = calculateEngineerWorkCompensation(selectedOrder, work, users);
     return {
       id: `${selectedOrder.id}-work-${index}`,
-      workType: workTypeLabel(work),
-      employee,
-      qty,
-      rate: workRateLabel(work, rule),
-      workAmount: orderWorkAmount(work),
-      earning: payrollForWork(selectedOrder, work, rule),
+      workType: compensation.workType,
+      employee: compensation.employee,
+      qty: compensation.qty,
+      rate: compensation.rateLabel,
+      workAmount: compensation.laborAmount,
+      earning: compensation.earning,
       workName: work.name,
+      salaryType: compensation.salaryType,
+      operationName: compensation.operationName,
     };
   });
   const totalEmployeeEarning = workCompensationRows.reduce((sum, row) => sum + row.earning, 0);
+  const selectedEngineerProfile = getEngineerCompensationProfile(selectedOrder.engineer, users);
+  const laborAmount = selectedOrder.works.reduce((sum, work) => sum + orderWorkAmount(work), 0);
+  const partsAmount = selectedOrder.parts.reduce((sum, part) => sum + part.price * part.qty, 0);
+  const deliveryAmount = selectedOrder.deliveryAmount ?? 0;
   const visibleLifecycle = isEngineerRole ? engineerLifecycleDisplay : canManageClientWork ? managerLifecycleDisplay : orderLifecycleDisplay;
   const visibleNextStatuses = nextStatuses.filter((status) => (
     isEngineerRole
@@ -15358,6 +15447,38 @@ function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations,
       </section>}
       <section className="panel-subsection">
         <div className="panel-heading">
+          <h2>Роботи інженера</h2>
+          <span>{selectedOrder.engineer || 'не призначено'}</span>
+        </div>
+        <div className="info-grid">
+          <Info label="Інженер" value={selectedOrder.engineer || '—'} />
+          <Info label="Тип нарахування" value={selectedEngineerProfile.salaryType} />
+          <Info label="Сума робіт" value={money(laborAmount)} />
+          <Info label="Запчастини" value={money(partsAmount)} />
+          <Info label="Доставка" value={money(deliveryAmount)} />
+          <Info label="Зарплата інженера" value={money(totalEmployeeEarning)} />
+        </div>
+        {selectedEngineerProfile.salaryType === 'percentage' && (
+          <div className="task-list">
+            <Task icon={<Banknote />} title="Процент інженера" text={`${selectedEngineerProfile.engineerPercent}% тільки від вартості робіт. Запчастини і доставка не входять у базу нарахування.`} />
+          </div>
+        )}
+        {selectedEngineerProfile.salaryType === 'piece_rate' && (
+          <div className="table payroll-table">
+            <div className="table-row table-head"><span>Операція</span><span>Кількість</span><span>Ставка</span><span>Разом</span></div>
+            {workCompensationRows.map((row) => (
+              <div className="table-row" key={`piece-${row.id}`}>
+                <span>{row.operationName}</span>
+                <span>{row.qty}</span>
+                <span>{row.rate}</span>
+                <span>{money(row.earning)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+      <section className="panel-subsection">
+        <div className="panel-heading">
           <h2>{isEngineerRole ? 'Мой заработок по заказу' : 'Работы и заработок сотрудника'}</h2>
           <span>{money(totalEmployeeEarning)} по этому заказу</span>
         </div>
@@ -15388,7 +15509,7 @@ function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations,
         <div className="panel-heading"><h2>Работы</h2><span>{selectedOrder.works.length} позиций</span></div>
         <div className="task-list">
           {selectedOrder.works.map((work, index) => (
-            <Task key={`${work.name}-${index}`} icon={<Wrench />} title={work.name} text={`${workTypeLabel(work)} · ${work.qty ?? 1} шт. · ставка ${workRateLabel(work, payrollRules.find((item) => item.employee === (work.engineer ?? selectedOrder.engineer)))} · заработок ${money(payrollForWork(selectedOrder, work, payrollRules.find((item) => item.employee === (work.engineer ?? selectedOrder.engineer))))}`} />
+            <Task key={`${work.name}-${index}`} icon={<Wrench />} title={work.name} text={`${workTypeLabel(work)} · ${work.qty ?? 1} шт. · ставка ${calculateEngineerWorkCompensation(selectedOrder, work, users).rateLabel} · заработок ${money(calculateEngineerWorkCompensation(selectedOrder, work, users).earning)}`} />
           ))}
           {selectedOrder.works.length === 0 && <div className="empty-state">Работы ещё не добавлены.</div>}
         </div>
@@ -16390,11 +16511,17 @@ function CashPage({
           </div>
         )}
       </section>
-      <section className="stats-grid">
-        <Metric icon={<Wallet />} label={dateFilter === 'today' ? 'Сума за сьогодні' : dateFilter === 'yesterday' ? 'Сума за вчора' : 'Сума за період'} value={money(totalAmount)} hint={`${filteredPayments.length} платежів`} />
-        <Metric icon={<Banknote />} label="Готівка" value={money(cashTotal)} hint="за вибраний період" />
-        <Metric icon={<CheckCircle2 />} label="Термінал" value={money(cardTotal)} hint="за вибраний період" />
-        <Metric icon={<Archive />} label="Безготівка" value={money(bankTotal)} hint="за вибраний період" />
+      <section className="panel">
+        <div className="panel-heading">
+          <h2>{dateFilter === 'today' ? 'Сьогодні' : dateFilter === 'yesterday' ? 'Вчора' : 'Період'}</h2>
+          <span>{filteredPayments.length} оплат</span>
+        </div>
+        <div className="stats-grid">
+          <Metric icon={<Banknote />} label="Готівка" value={money(cashTotal)} hint="прийнято" />
+          <Metric icon={<CheckCircle2 />} label="Термінал" value={money(cardTotal)} hint="прийнято" />
+          <Metric icon={<Archive />} label="Безготівка" value={money(bankTotal)} hint="прийнято" />
+          <Metric icon={<Wallet />} label="Всього" value={money(totalAmount)} hint="усі способи" />
+        </div>
       </section>
       <section className="stats-grid">
         <Metric icon={<Banknote />} label="Готівка в касі" value={money(expectedCash)} hint={cashShift.status === 'Відкрита' ? `зміна ${cashShift.id}` : 'зміна закрита'} />
@@ -16454,9 +16581,9 @@ function CashPage({
         </div>
       </section>
       <section className="panel">
-        <div className="panel-heading"><h2>Журнал каси</h2><span>{filteredPayments.length} операцій</span></div>
+        <div className="panel-heading"><h2>Список оплат</h2><span>{filteredPayments.length} операцій</span></div>
         <div className="table payments-table">
-          <div className="table-row table-head"><span>Дата</span><span>Клієнт</span><span>Документ</span><span>Сума</span><span>Спосіб</span><span>Статус</span><span>Співробітник</span></div>
+          <div className="table-row table-head"><span>Дата</span><span>Замовлення</span><span>Сума</span><span>Спосіб</span><span>Хто прийняв</span></div>
           {filteredPayments.map((payment) => {
             const canReverse = payment.amount > 0
               && ['подтвержден', 'проведено'].includes(payment.status)
@@ -16464,12 +16591,11 @@ function CashPage({
             return (
               <div className="table-row" key={payment.id}>
                 <span>{payment.createdAt ?? payment.date}</span>
-                <span>{payment.client}</span>
                 <span>{payment.entityId}</span>
                 <span>{money(payment.amount)}</span>
-                <span>{paymentMethodLabel(payment.method)}<small>{payment.cashShiftId || payment.documentRef || payment.id}</small></span>
                 <span>
-                  {paymentStatusLabel(payment.status)}
+                  {paymentMethodLabel(payment.method)}
+                  <small>{paymentStatusLabel(payment.status)}</small>
                   {payment.status === 'ожидает поступления' && ['Бухгалтер', 'Менеджер', 'Адміністратор'].includes(activeUser.role) && ['order', 'sale'].includes(payment.entityType) ? <button type="button" onClick={() => confirmBankPayment(payment.id)}>Підтвердити</button> : null}
                   {canReverse ? <button type="button" onClick={() => setPaymentActionDraft({ paymentId: payment.id, action: 'cancel', amount: String(Math.abs(payment.amount)), reason: 'Скасування платежу', method: paymentMethodValue(payment.method) })}>Скасувати</button> : null}
                   {canReverse ? <button type="button" onClick={() => setPaymentActionDraft({ paymentId: payment.id, action: 'refund', amount: String(Math.abs(payment.amount)), reason: 'Повернення коштів', method: paymentMethodValue(payment.method) })}>Повернення</button> : null}
@@ -18107,7 +18233,7 @@ function ReportsPage({ orders, sales, purchases, receipts, movements, products, 
   );
 }
 
-function PayrollPage({ orders, activeUser }: { orders: ServiceOrder[]; activeUser: User }) {
+function PayrollPage({ orders, activeUser, users }: { orders: ServiceOrder[]; activeUser: User; users: User[] }) {
   const closedStatuses: OrderStatus[] = ['Видано', 'Закрито'];
   const [periodFilter, setPeriodFilter] = useState<'today' | 'week' | 'month'>('today');
   const todayDate = parseDateTime(today) ?? new Date();
@@ -18123,30 +18249,40 @@ function PayrollPage({ orders, activeUser }: { orders: ServiceOrder[]; activeUse
   const workRows = orders.flatMap((order) =>
     order.works.map((work, index) => {
       const employee = work.engineer ?? order.engineer;
-      const rule = payrollRules.find((item) => item.employee === employee);
       const qty = work.qty ?? 1;
-      const workAmount = orderWorkAmount(work);
+      const compensation = calculateEngineerWorkCompensation(order, work, users);
+      const workAmount = compensation.laborAmount;
       const paidAndClosed = closedStatuses.includes(order.status) && orderTotals(order).debt <= 0 && orderTotals(order).paid > 0;
-      const accrued = paidAndClosed ? payrollForWork(order, work, rule) : 0;
+      const accrued = paidAndClosed ? compensation.earning : 0;
       const completedAt = paidAndClosed ? order.statusChangedAt : undefined;
       return {
         id: `${order.id}-${index}`,
         order,
         work,
         employee,
-        rule,
         workType: workTypeLabel(work),
         qty,
         workAmount,
-        rateLabel: workRateLabel(work, rule),
+        rateLabel: compensation.rateLabel,
         accrued,
         completedAt,
         status: paidAndClosed ? 'Нараховано' : 'Очікує оплату / видачу',
+        salaryType: compensation.salaryType,
       };
     }),
   );
   const visibleRows = activeUser.role === 'Інженер' ? workRows.filter((row) => row.employee === activeUser.name) : workRows;
-  const employeeSummaries = buildPayrollEmployeeSummaries(orders).filter((row) => activeUser.role === 'Інженер' ? row.rule.employee === activeUser.name : true);
+  const employeeSummaries = Array.from(
+    visibleRows.reduce((map, row) => {
+      const current = map.get(row.employee) ?? { employee: row.employee, orders: new Set<string>(), workAmount: 0, accrued: 0, salaryType: row.salaryType, status: 'Нараховано' as 'Нараховано' | 'Виплачено' };
+      current.orders.add(row.order.id);
+      current.workAmount += row.workAmount;
+      current.accrued += row.accrued;
+      current.status = row.status === 'Нараховано' ? 'Виплачено' : 'Нараховано';
+      map.set(row.employee, current);
+      return map;
+    }, new Map<string, { employee: string; orders: Set<string>; workAmount: number; accrued: number; salaryType: EngineerSalaryType; status: 'Нараховано' | 'Виплачено' }>()),
+  ).map(([, value]) => value);
   const todayKey = extractDayKey(today);
   const monthKey = extractMonthKey(today);
   const completedVisibleRows = visibleRows.filter((row) => row.status === 'Нараховано');
@@ -18182,11 +18318,11 @@ function PayrollPage({ orders, activeUser }: { orders: ServiceOrder[]; activeUse
           <div className="panel-heading"><h2>{isEngineer ? 'Підсумок по мені' : 'Інженери за період'}</h2><span>{employeeSummaries.length} людей</span></div>
           <div className="task-list">
             {employeeSummaries.map((row) => (
-              <details key={row.rule.employee} className="task">
-                <summary style={{ cursor: 'pointer', fontWeight: 700 }}>{row.rule.employee} — замовлень {row.ordersCount} · ремонт {money(row.repairAccrued)} · картриджі {money(row.cartridgeAccrued)} · всього {money(row.accrued)}</summary>
+              <details key={row.employee} className="task">
+                <summary style={{ cursor: 'pointer', fontWeight: 700 }}>{row.employee} — замовлень {row.orders.size} · база {money(row.workAmount)} · всього {money(row.accrued)}</summary>
                 <div style={{ marginTop: '8px' }}>
-                  <p>Середній дохід на замовлення: {money(row.avgOrderAccrued)}</p>
-                  {visibleRows.filter((item) => item.employee === row.rule.employee && item.status === 'Нараховано').map((item) => (
+                  <p>Тип: {row.salaryType} · статус: {row.status}</p>
+                  {visibleRows.filter((item) => item.employee === row.employee && item.status === 'Нараховано').map((item) => (
                     <p key={`detail-${item.id}`}>{item.order.id} · {item.workType} · {money(item.workAmount)} → {money(item.accrued)}</p>
                   ))}
                 </div>
@@ -18197,11 +18333,27 @@ function PayrollPage({ orders, activeUser }: { orders: ServiceOrder[]; activeUse
         <div className="panel">
           <div className="panel-heading"><h2>{isEngineer ? 'Як рахується' : 'Правила розрахунку'}</h2><span>тільки після грошей</span></div>
           <div className="task-list">
-            {payrollRules.filter((rule) => activeUser.role === 'Інженер' ? rule.employee === activeUser.name : true).map((rule) => (
-              <Task key={rule.employee} icon={<ShieldCheck />} title={rule.employee} text={rule.role === 'Інженер' ? `Ремонт техніки: ${rule.percent ?? 0}% тільки від роботи. Заправка і регенерація рахуються по ставці за штуку. Якщо гроші не отримані — зарплати немає.` : `${rule.type}.`} />
+            {users.filter((user) => user.role === 'Інженер' && (activeUser.role !== 'Інженер' || user.name === activeUser.name)).map((user) => (
+              <Task key={user.id} icon={<ShieldCheck />} title={user.name} text={user.salaryType === 'piece_rate' ? 'Piece-rate: нарахування йде по операціях і кількості.' : `Percentage: ${user.engineerPercent ?? 40}% тільки від вартості робіт.`} />
             ))}
             {employeeSummaries.length === 0 && <div className="empty-state">Пока нет начислений для отображения.</div>}
           </div>
+        </div>
+      </section>
+      <section className="panel">
+        <div className="panel-heading"><h2>Зведення по зарплаті</h2><span>{employeeSummaries.length} інженерів</span></div>
+        <div className="table payroll-table">
+          <div className="table-row table-head"><span>Інженер</span><span>Кількість замовлень</span><span>Сума робіт</span><span>Сума нарахувань</span><span>Період</span><span>Статус</span></div>
+          {employeeSummaries.map((row) => (
+            <div className="table-row" key={`summary-${row.employee}`}>
+              <span>{row.employee}</span>
+              <span>{row.orders.size}</span>
+              <span>{money(row.workAmount)}</span>
+              <span>{money(row.accrued)}</span>
+              <span>{periodFilter === 'today' ? 'Сьогодні' : periodFilter === 'week' ? 'Тиждень' : 'Місяць'}</span>
+              <span>{row.status}</span>
+            </div>
+          ))}
         </div>
       </section>
       <section className="panel">
@@ -18226,7 +18378,7 @@ function PayrollPage({ orders, activeUser }: { orders: ServiceOrder[]; activeUse
         <div className="panel-heading"><h2>Підсумки для керівника</h2><span>тільки закриті та оплачені замовлення</span></div>
         <div className="task-list">
           {employeeSummaries.map((row) => (
-            <Task key={`owner-payroll-${row.rule.employee}`} icon={<Banknote />} title={row.rule.employee} text={`За день ${money(row.dayAccrued)}, за місяць ${money(row.monthAccrued)}, ремонт ${money(row.repairAccrued)}, картриджі ${money(row.cartridgeAccrued)}, середній дохід ${money(row.avgOrderAccrued)}.`} />
+            <Task key={`owner-payroll-${row.employee}`} icon={<Banknote />} title={row.employee} text={`Замовлень ${row.orders.size}, база ${money(row.workAmount)}, нараховано ${money(row.accrued)}, статус ${row.status}.`} />
           ))}
         </div>
       </section>}
@@ -18279,6 +18431,10 @@ function TeamPage({ users, setUsers, activeUser }: { users: User[]; setUsers: Re
   const [editPhone, setEditPhone] = useState('');
   const [editEmail, setEditEmail] = useState('');
   const [editRole, setEditRole] = useState<Role>('Інженер');
+  const [salaryType, setSalaryType] = useState<EngineerSalaryType>('percentage');
+  const [engineerPercent, setEngineerPercent] = useState('40');
+  const [editSalaryType, setEditSalaryType] = useState<EngineerSalaryType>('percentage');
+  const [editEngineerPercent, setEditEngineerPercent] = useState('40');
   const [editPermissions, setEditPermissions] = useState<UserPermissions>(() => defaultPermissionsForRole('Інженер'));
   const visibleUsers = users.filter((person) => person.login !== 'dev.admin');
   const filteredVisibleUsers = visibleUsers.filter((person) => {
@@ -18308,11 +18464,19 @@ function TeamPage({ users, setUsers, activeUser }: { users: User[]; setUsers: Re
   const handleRoleChange = (nextRole: Role) => {
     setRole(nextRole);
     setPermissions(defaultPermissionsForRole(nextRole));
+    if (nextRole === 'Інженер') {
+      setSalaryType('percentage');
+      setEngineerPercent('40');
+    }
   };
 
   const handleEditRoleChange = (nextRole: Role) => {
     setEditRole(nextRole);
     setEditPermissions(defaultPermissionsForRole(nextRole));
+    if (nextRole === 'Інженер') {
+      setEditSalaryType('percentage');
+      setEditEngineerPercent('40');
+    }
   };
 
   const startEditing = (person: User) => {
@@ -18321,6 +18485,8 @@ function TeamPage({ users, setUsers, activeUser }: { users: User[]; setUsers: Re
     setEditPhone(person.phone ?? '');
     setEditEmail(person.email ?? '');
     setEditRole(person.role);
+    setEditSalaryType(person.salaryType ?? 'percentage');
+    setEditEngineerPercent(String(person.engineerPercent ?? 40));
     setEditPermissions({ ...person.permissions });
   };
 
@@ -18330,6 +18496,8 @@ function TeamPage({ users, setUsers, activeUser }: { users: User[]; setUsers: Re
     setEditPhone('');
     setEditEmail('');
     setEditRole('Інженер');
+    setEditSalaryType('percentage');
+    setEditEngineerPercent('40');
     setEditPermissions(defaultPermissionsForRole('Інженер'));
   };
 
@@ -18348,6 +18516,9 @@ function TeamPage({ users, setUsers, activeUser }: { users: User[]; setUsers: Re
           twoFactor: false,
           login: loginBase,
           authMode: 'phone_code',
+          salaryType: role === 'Інженер' ? salaryType : undefined,
+          engineerPercent: role === 'Інженер' && salaryType === 'percentage' ? (Number(engineerPercent) || 40) : undefined,
+          pieceRates: role === 'Інженер' ? defaultEngineerPieceRates.map((item) => ({ ...item })) : undefined,
           permissions,
           session: 'Активна',
         },
@@ -18360,6 +18531,8 @@ function TeamPage({ users, setUsers, activeUser }: { users: User[]; setUsers: Re
     setPhone('');
     setEmail('');
     setRole('Інженер');
+    setSalaryType('percentage');
+    setEngineerPercent('40');
     setPermissions(defaultPermissionsForRole('Інженер'));
   };
 
@@ -18375,6 +18548,8 @@ function TeamPage({ users, setUsers, activeUser }: { users: User[]; setUsers: Re
               phone: editPhone.trim() || undefined,
               email: editEmail.trim() || undefined,
               role: editRole,
+              salaryType: editRole === 'Інженер' ? editSalaryType : undefined,
+              engineerPercent: editRole === 'Інженер' && editSalaryType === 'percentage' ? (Number(editEngineerPercent) || 40) : undefined,
               permissions: editPermissions,
             }
           : person
@@ -18422,6 +18597,23 @@ function TeamPage({ users, setUsers, activeUser }: { users: User[]; setUsers: Re
               {simplifiedRoles.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
             </select>
           </label>
+          {role === 'Інженер' && (
+            <>
+              <label>
+                Тип зарплати
+                <select value={salaryType} onChange={(event) => setSalaryType(event.target.value as EngineerSalaryType)}>
+                  <option value="percentage">percentage</option>
+                  <option value="piece_rate">piece_rate</option>
+                </select>
+              </label>
+              {salaryType === 'percentage' && (
+                <label>
+                  Процент інженера
+                  <input type="number" min={0} max={100} value={engineerPercent} onChange={(event) => setEngineerPercent(event.target.value)} />
+                </label>
+              )}
+            </>
+          )}
         </div>
         <div className="task-list" style={{ marginTop: '16px' }}>
           {permissionLabels.map((item) => (
@@ -18476,6 +18668,23 @@ function TeamPage({ users, setUsers, activeUser }: { users: User[]; setUsers: Re
                       {simplifiedRoles.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
                     </select>
                   </label>
+                  {editRole === 'Інженер' && (
+                    <>
+                      <label>
+                        Тип зарплати
+                        <select value={editSalaryType} onChange={(event) => setEditSalaryType(event.target.value as EngineerSalaryType)}>
+                          <option value="percentage">percentage</option>
+                          <option value="piece_rate">piece_rate</option>
+                        </select>
+                      </label>
+                      {editSalaryType === 'percentage' && (
+                        <label>
+                          Процент інженера
+                          <input type="number" min={0} max={100} value={editEngineerPercent} onChange={(event) => setEditEngineerPercent(event.target.value)} />
+                        </label>
+                      )}
+                    </>
+                  )}
                 </div>
                 <div className="task-list" style={{ marginTop: '12px' }}>
                   {permissionLabels.map((item) => (
@@ -18508,6 +18717,8 @@ function TeamPage({ users, setUsers, activeUser }: { users: User[]; setUsers: Re
                   <span>Співробітники: {person.permissions.canAccessEmployees ? 'так' : 'ні'}</span>
                   <span>Налаштування: {person.permissions.canAccessSettings ? 'так' : 'ні'}</span>
                   <span>Звіти: {person.permissions.canAccessReports ? 'так' : 'ні'}</span>
+                  {person.role === 'Інженер' && <span>Тип зарплати: {person.salaryType ?? 'percentage'}</span>}
+                  {person.role === 'Інженер' && person.salaryType !== 'piece_rate' && <span>Процент: {person.engineerPercent ?? 40}%</span>}
                 </div>
                 {canManageEmployees && (
                   <div className="action-row" style={{ marginTop: '12px' }}>
