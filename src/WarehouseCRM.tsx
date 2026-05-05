@@ -4209,8 +4209,9 @@ function strictManagerWorkflowStatus(order: ServiceOrder) {
 
 function simpleRepairStatusClass(status: ReturnType<typeof simpleRepairStatus>) {
   if (status === 'Прийнято') return 'tag tag-gray';
-  if (status === 'В ремонті') return 'tag tag-amber';
+  if (status === 'В ремонті') return 'tag tag-blue';
   if (status === 'Готово') return 'tag tag-green';
+  if (status === 'Видано') return 'tag tag-gray';
   return 'tag tag-blue';
 }
 
@@ -13421,7 +13422,7 @@ function OrdersPage(props: {
                       </span>
                       <span className="manager-order-metric">
                         <span className="manager-order-metric-label">Борг</span>
-                        <span className={`manager-order-cell manager-order-cell-money ${remainingForBadge > 0 ? 'manager-order-cell-debt' : ''}`}>{remainingForBadge > 0 ? `● ${money(remainingForBadge)}` : '—'}</span>
+                        <span className={`manager-order-cell manager-order-cell-money ${remainingForBadge > 0 ? 'manager-order-cell-debt manager-order-debt-badge' : ''}`}>{remainingForBadge > 0 ? `● ${money(remainingForBadge)}` : '—'}</span>
                       </span>
                       <span className="manager-order-metric manager-order-metric-date">
                         <span className="manager-order-metric-label">Дата</span>
