@@ -119,6 +119,9 @@ type ClientRecord = {
   phone: string;
   email?: string;
   taxId?: string;
+  legalType?: 'company' | 'fop' | 'person';
+  address?: string;
+  comment?: string;
   orders: number;
 };
 
@@ -2005,12 +2008,12 @@ const acceptanceChecklist = [
 ];
 
 const initialClients: ClientRecord[] = [
-  { name: 'Олена Коваленко', phone: '+380 67 441 28 10', taxId: '', orders: 3 },
-  { name: 'ТОВ "Альфа-Сервіс"', phone: '+380 44 301 88 20', taxId: '41234567', orders: 12 },
-  { name: 'Ігор Мельник', phone: '+380 50 617 73 04', taxId: '', orders: 2 },
-  { name: 'Наталія Романюк', phone: '+380 93 118 45 66', taxId: '', orders: 5 },
-  { name: 'ТОВ "Демо ПДВ"', phone: '+380 44 555 10 50', taxId: '44556677', orders: 1 },
-  { name: 'ТОВ "TEST ПН"', phone: '+380 44 555 10 51', taxId: '44556678', orders: 1 },
+  { name: 'Олена Коваленко', phone: '+380 67 441 28 10', taxId: '', legalType: 'person', orders: 3 },
+  { name: 'ТОВ "Альфа-Сервіс"', phone: '+380 44 301 88 20', taxId: '41234567', legalType: 'company', orders: 12 },
+  { name: 'Ігор Мельник', phone: '+380 50 617 73 04', taxId: '', legalType: 'person', orders: 2 },
+  { name: 'Наталія Романюк', phone: '+380 93 118 45 66', taxId: '', legalType: 'person', orders: 5 },
+  { name: 'ТОВ "Демо ПДВ"', phone: '+380 44 555 10 50', taxId: '44556677', legalType: 'company', orders: 1 },
+  { name: 'ТОВ "TEST ПН"', phone: '+380 44 555 10 51', taxId: '44556678', legalType: 'company', orders: 1 },
 ];
 
 const payrollRules: PayrollRule[] = [
@@ -2078,6 +2081,13 @@ function mergeSeededClients(stored: ClientRecord[], seeded: ClientRecord[]) {
   ];
 }
 
+function inferClientLegalType(client: Partial<ClientRecord>) {
+  const source = `${client.name ?? ''} ${client.taxId ?? ''}`.toLowerCase();
+  if (source.includes('тов') || source.includes('llc') || source.includes('пп') || source.includes('дп')) return 'company' as const;
+  if (source.includes('фоп')) return 'fop' as const;
+  return 'person' as const;
+}
+
 function loadClientsFromStorage(): ClientRecord[] {
   try {
     const raw = localStorage.getItem(CLIENTS_STORAGE_KEY);
@@ -2089,6 +2099,11 @@ function loadClientsFromStorage(): ClientRecord[] {
           phone: normalizeImportedPhone(client.phone),
           email: client.email ? String(client.email).trim() : undefined,
           taxId: normalizeTaxId(client.taxId),
+          legalType: client.legalType === 'company' || client.legalType === 'fop' || client.legalType === 'person'
+            ? client.legalType
+            : inferClientLegalType(client),
+          address: client.address ? String(client.address).trim() : undefined,
+          comment: client.comment ? String(client.comment).trim() : undefined,
           orders: Number(client.orders) || 0,
         } satisfies ClientRecord)), initialClients)
       : initialClients;
@@ -2101,6 +2116,9 @@ function saveClientsToStorage(clients: ClientRecord[]) {
   localStorage.setItem(CLIENTS_STORAGE_KEY, JSON.stringify(clients.map((client) => ({
     ...client,
     taxId: normalizeTaxId(client.taxId),
+    legalType: client.legalType ?? inferClientLegalType(client),
+    address: client.address?.trim() || undefined,
+    comment: client.comment?.trim() || undefined,
   }))));
 }
 
@@ -4595,6 +4613,7 @@ useEffect(() => {
   const [query, setQuery] = useState('');
   const [globalClientSearch, setGlobalClientSearch] = useState('');
   const [globalFocusedClientPhone, setGlobalFocusedClientPhone] = useState('');
+  const [openQuickOrderRequest, setOpenQuickOrderRequest] = useState(0);
   const [showGlobalSearchResults, setShowGlobalSearchResults] = useState(false);
   const [users, setUsers] = useState<User[]>(() => loadEmployeesFromStorage());
   const [products, setProducts] = useState<Product[]>(() => loadProductsFromStorage());
@@ -4979,6 +4998,73 @@ useEffect(() => {
     saveClientsToStorage(importedClients);
     setCustomerList(importedClients);
     setNotice(`Імпортовано клієнтів: ${importedClients.length}`);
+  }
+
+  function upsertClientRecord(payload: {
+    originalPhone?: string;
+    name: string;
+    phone: string;
+    email?: string;
+    taxId?: string;
+    legalType?: 'company' | 'fop' | 'person';
+    address?: string;
+    comment?: string;
+  }) {
+    const normalizedPhone = normalizeImportedPhone(payload.phone);
+    const originalPhone = normalizeImportedPhone(payload.originalPhone);
+    const normalizedTaxId = normalizeTaxId(payload.taxId);
+    const nextClient: ClientRecord = {
+      name: payload.name.trim(),
+      phone: normalizedPhone,
+      email: payload.email?.trim() || undefined,
+      taxId: normalizedTaxId,
+      legalType: payload.legalType ?? inferClientLegalType(payload),
+      address: payload.address?.trim() || undefined,
+      comment: payload.comment?.trim() || undefined,
+      orders: 0,
+    };
+    if (!nextClient.name || !nextClient.phone) {
+      setNotice('Для картки клієнта потрібні імʼя та телефон.');
+      return false;
+    }
+    let saved = false;
+    setCustomerList((current) => {
+      const existing = current.find((client) => {
+        const sameOriginal = originalPhone && normalizeImportedPhone(client.phone) === originalPhone;
+        const samePhone = normalizeImportedPhone(client.phone) === normalizedPhone;
+        return sameOriginal || samePhone;
+      });
+      const preservedOrders = existing?.orders ?? 0;
+      const mergedClient: ClientRecord = { ...nextClient, orders: preservedOrders };
+      saved = true;
+      if (existing) {
+        return current.map((client) => (
+          normalizeImportedPhone(client.phone) === normalizeImportedPhone(existing.phone)
+            ? mergedClient
+            : client
+        ));
+      }
+      return [mergedClient, ...current];
+    });
+    if (saved) {
+      setGlobalFocusedClientPhone(normalizedPhone);
+      setNotice(originalPhone ? `Картку клієнта ${nextClient.name} оновлено.` : `Клієнта ${nextClient.name} створено.`);
+    }
+    return saved;
+  }
+
+  function openQuickOrderForClient(client: ClientRecord) {
+    handleQuickPhoneChange(client.phone);
+    setQuickClientName(client.name);
+    setPage('dashboard');
+    setGlobalFocusedClientPhone(client.phone);
+    setGlobalClientSearch(client.name);
+    setOpenQuickOrderRequest((current) => current + 1);
+    setNotice(`Клієнта ${client.name} підставлено у нове замовлення.`);
+  }
+
+  function messageClientRecord(client: ClientRecord) {
+    setNotice(`Контакт клієнта ${client.name}: ${client.phone}${client.email ? ` · ${client.email}` : ''}`);
   }
 
   async function handleProductsImport(file: File) {
@@ -9887,6 +9973,7 @@ useEffect(() => {
             setQuickLocationCode={setQuickLocationCode}
             setQuickComment={setQuickComment}
             createQuickOrder={createQuickOrder}
+            openQuickOrderRequest={openQuickOrderRequest}
             patchSimpleManagerOrder={patchSimpleManagerOrder}
             updateSimpleManagerOrderStatus={updateSimpleManagerOrderStatus}
             editSimpleManagerOrder={editSimpleManagerOrder}
@@ -10111,6 +10198,7 @@ useEffect(() => {
             setQuickLocationCode={setQuickLocationCode}
             setQuickComment={setQuickComment}
             createQuickOrder={createQuickOrder}
+            openQuickOrderRequest={openQuickOrderRequest}
             patchSimpleManagerOrder={patchSimpleManagerOrder}
             updateSimpleManagerOrderStatus={updateSimpleManagerOrderStatus}
             editSimpleManagerOrder={editSimpleManagerOrder}
@@ -10220,6 +10308,7 @@ useEffect(() => {
             setQuickLocationCode={setQuickLocationCode}
             setQuickComment={setQuickComment}
             createQuickOrder={createQuickOrder}
+            openQuickOrderRequest={openQuickOrderRequest}
             patchSimpleManagerOrder={patchSimpleManagerOrder}
             updateSimpleManagerOrderStatus={updateSimpleManagerOrderStatus}
             editSimpleManagerOrder={editSimpleManagerOrder}
@@ -10324,6 +10413,9 @@ useEffect(() => {
             initialSearch={globalClientSearch}
             focusedClientPhone={globalFocusedClientPhone}
             onFocusedClientPhoneChange={setGlobalFocusedClientPhone}
+            upsertClient={upsertClientRecord}
+            openQuickOrderForClient={openQuickOrderForClient}
+            messageClientRecord={messageClientRecord}
           />
         )}
         {canViewPage(page) && page === 'finance' && (
@@ -12648,6 +12740,7 @@ function OrdersPage(props: {
   dashboardFocus: { orderId: string; target: DashboardFocusTarget } | null;
   clearDashboardFocus: () => void;
   notifyUser: (message: string) => void;
+  openQuickOrderRequest?: number;
   canDo: (permission: Permission) => boolean;
   showCost: boolean;
   activeUser: User;
@@ -12678,6 +12771,17 @@ function OrdersPage(props: {
   const [managerPostPaymentOrderId, setManagerPostPaymentOrderId] = useState('');
   const [managerExceptionDraft, setManagerExceptionDraft] = useState<{ orderId: string; mode: 'cancel' | 'reopen' | 'refund' | 'part-return'; reason: string; comment: string; amount: string; partId?: string } | null>(null);
   const managerPaymentAmountInputRef = useRef<HTMLInputElement | null>(null);
+  const lastOpenQuickOrderRequestRef = useRef(props.openQuickOrderRequest ?? 0);
+
+  useEffect(() => {
+    if (!props.openQuickOrderRequest) return;
+    if (props.openQuickOrderRequest === lastOpenQuickOrderRequestRef.current) return;
+    lastOpenQuickOrderRequestRef.current = props.openQuickOrderRequest;
+    setShowManagerCreateForm(true);
+    setManagerSearch('');
+    setIsManagerOrderDetailOpen(false);
+    setManagerPostPaymentOrderId('');
+  }, [props.openQuickOrderRequest]);
   const roleOrders = props.allRoleOrders ?? props.orders;
   const managerSourceOrders = props.allRoleOrders ?? props.allOrders;
   const managerEngineers = props.users.filter((user) => user.role === 'Інженер');
@@ -17595,6 +17699,9 @@ function ClientsPage({
   initialSearch,
   focusedClientPhone,
   onFocusedClientPhoneChange,
+  upsertClient,
+  openQuickOrderForClient,
+  messageClientRecord,
 }: {
   clients: ClientRecord[];
   orders: ServiceOrder[];
@@ -17606,6 +17713,9 @@ function ClientsPage({
   initialSearch?: string;
   focusedClientPhone?: string;
   onFocusedClientPhoneChange?: (phone: string) => void;
+  upsertClient: (payload: { originalPhone?: string; name: string; phone: string; email?: string; taxId?: string; legalType?: 'company' | 'fop' | 'person'; address?: string; comment?: string }) => boolean;
+  openQuickOrderForClient: (client: ClientRecord) => void;
+  messageClientRecord: (client: ClientRecord) => void;
 }) {
   const importClientsInputRef = useRef<HTMLInputElement | null>(null);
   const [clientSearch, setClientSearch] = useState('');
@@ -17613,9 +17723,49 @@ function ClientsPage({
   const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([]);
   const [contractStartDate, setContractStartDate] = useState('');
   const [contractEndDate, setContractEndDate] = useState('');
+  const [clientFilter, setClientFilter] = useState<'all' | 'debt' | 'regular' | 'idle'>('all');
+  const [clientEditor, setClientEditor] = useState<null | {
+    mode: 'create' | 'edit';
+    originalPhone?: string;
+    name: string;
+    phone: string;
+    email: string;
+    taxId: string;
+    legalType: 'company' | 'fop' | 'person';
+    address: string;
+    comment: string;
+  }>(null);
+  const [messageClient, setMessageClient] = useState<ClientRecord | null>(null);
+  const clientTypeLabel = (type?: ClientRecord['legalType']) => {
+    if (type === 'company') return 'Компанія';
+    if (type === 'fop') return 'ФОП';
+    return 'Фізособа';
+  };
   const focusClient = (phone: string) => {
     setSelectedClientPhone(phone);
     onFocusedClientPhoneChange?.(phone);
+  };
+  const openClientEditor = (client?: ClientRecord) => {
+    setClientEditor(client ? {
+      mode: 'edit',
+      originalPhone: client.phone,
+      name: client.name,
+      phone: client.phone,
+      email: client.email ?? '',
+      taxId: client.taxId ?? '',
+      legalType: client.legalType ?? inferClientLegalType(client),
+      address: client.address ?? '',
+      comment: client.comment ?? '',
+    } : {
+      mode: 'create',
+      name: '',
+      phone: '',
+      email: '',
+      taxId: '',
+      legalType: 'person',
+      address: '',
+      comment: '',
+    });
   };
 
   useEffect(() => {
@@ -17639,49 +17789,52 @@ function ClientsPage({
   }
 
   const filteredClients = clients.filter((client) => {
-    return matchesClientSearch(client, clientSearch);
+    if (!matchesClientSearch(client, clientSearch)) return false;
+    const clientOrders = orders.filter((order) => isSameClientOrder(client, order));
+    const { totalDebt: clientDebt } = clientDebtSummary(client, orders);
+    if (clientFilter === 'debt') return clientDebt > 0;
+    if (clientFilter === 'regular') return clientOrders.length >= 3;
+    if (clientFilter === 'idle') return clientOrders.length === 0;
+    return true;
   });
   const selectedClient = filteredClients.find((client) => client.phone === selectedClientPhone) ?? filteredClients[0] ?? clients[0];
 
   return (
-    <div className="page-grid">
-      <PageTitle eyebrow="Клієнти" title="Клієнтська база сервісу" text="Пошук -> список -> вибір -> дія." />
-      <section className="panel manager-orders-toolbar">
+    <div className="page-grid clients-page">
+      <PageTitle eyebrow="Клієнти" title="Клієнтська база сервісу" text="Пошук, борги, історія звернень і швидкий старт нового замовлення." />
+      <section className="panel manager-orders-toolbar clients-toolbar">
         <div className="manager-orders-toolbar-search">
           <input value={clientSearch} onChange={(event) => setClientSearch(event.target.value)} placeholder="Пошук: телефон / ім'я / компанія / ЄДРПОУ / ІПН" />
         </div>
         <div className="manager-orders-toolbar-filter">
-        <input ref={importClientsInputRef} type="file" accept=".xlsx,.csv" onChange={handleClientsFileChange} style={{ display: 'none' }} />
-        <button type="button" onClick={() => importClientsInputRef.current?.click()}>Імпорт клієнтів</button>
+          <input ref={importClientsInputRef} type="file" accept=".xlsx,.csv" onChange={handleClientsFileChange} style={{ display: 'none' }} />
+          <button type="button" className={clientFilter === 'all' ? 'primary' : ''} onClick={() => setClientFilter('all')}>Усі</button>
+          <button type="button" className={clientFilter === 'debt' ? 'primary' : ''} onClick={() => setClientFilter('debt')}>Борг</button>
+          <button type="button" className={clientFilter === 'regular' ? 'primary' : ''} onClick={() => setClientFilter('regular')}>Постійні</button>
+          <button type="button" className={clientFilter === 'idle' ? 'primary' : ''} onClick={() => setClientFilter('idle')}>Без замовлень</button>
+          <button type="button" onClick={() => importClientsInputRef.current?.click()}>Імпорт</button>
+          <button type="button" className="submit-button clients-primary-action" onClick={() => openClientEditor()}>+ Новий клієнт</button>
         </div>
       </section>
       <div className="manager-orders-workspace">
-        <section className="panel manager-orders-list">
+        <section className="panel manager-orders-list clients-list-panel">
           <div className="panel-heading">
             <h2>Клієнти</h2>
             <span>{filteredClients.length}</span>
           </div>
           <div className="manager-orders-list-body">
-            <div className="table clients-compact-table">
-              <div className="table-row table-head">
-                <span>Клієнт</span>
-                <span>Телефон</span>
-                <span>Замовлення</span>
-                <span>Борг</span>
-                <span>Останній заказ</span>
-                <span>Дія</span>
-              </div>
+            <div className="clients-rows">
               {filteredClients.map((client, index) => {
                 const clientOrders = orders.filter((order) => isSameClientOrder(client, order));
                 const lastOrder = [...clientOrders].sort((a, b) => (parseDateTime(b.intakeDate)?.getTime() ?? 0) - (parseDateTime(a.intakeDate)?.getTime() ?? 0))[0];
                 const { totalDebt: clientDebt } = clientDebtSummary(client, orders);
+                const isRegular = clientOrders.length >= 3;
                 return (
-                  <div
+                  <button
+                    type="button"
                     key={`${client.phone}-${client.email ?? index}`}
-                    className={`table-row${selectedClient?.phone === client.phone ? ' is-selected' : ''}`}
+                    className={`clients-list-row${selectedClient?.phone === client.phone ? ' is-selected' : ''}${clientDebt > 0 ? ' has-debt' : ''}`}
                     onClick={() => focusClient(client.phone)}
-                    role="button"
-                    tabIndex={0}
                     onKeyDown={(event) => {
                       if (event.key === 'Enter' || event.key === ' ') {
                         event.preventDefault();
@@ -17689,13 +17842,36 @@ function ClientsPage({
                       }
                     }}
                   >
-                    <span>{client.name}<small>{client.taxId ? `ЄДРПОУ / ІПН ${client.taxId}` : 'без коду'}</small></span>
-                    <span>{client.phone}</span>
-                    <span>{client.orders}</span>
-                    <span>{money(clientDebt)}</span>
-                    <span>{lastOrder ? `${lastOrder.id} · ${lastOrder.intakeDate}` : '—'}</span>
-                    <span><button type="button" onClick={(event) => { event.stopPropagation(); focusClient(client.phone); }}>Відкрити</button></span>
-                  </div>
+                    <span className="clients-row-primary">
+                      <span className="clients-row-title">{client.name}</span>
+                      <span className="clients-row-subtitle">{client.taxId ? `ЄДРПОУ / ІПН ${client.taxId}` : clientTypeLabel(client.legalType)}</span>
+                    </span>
+                    <span className="clients-row-metric">
+                      <span className="clients-row-label">Телефон</span>
+                      <span>{client.phone}</span>
+                    </span>
+                    <span className="clients-row-metric">
+                      <span className="clients-row-label">Замовлення</span>
+                      <span>{clientOrders.length}</span>
+                    </span>
+                    <span className="clients-row-metric">
+                      <span className="clients-row-label">Борг</span>
+                      <span className={clientDebt > 0 ? 'clients-row-debt' : ''}>{money(clientDebt)}</span>
+                    </span>
+                    <span className="clients-row-metric">
+                      <span className="clients-row-label">Останній заказ</span>
+                      <span>{lastOrder ? lastOrder.id : '—'}</span>
+                    </span>
+                    <span className="clients-row-metric">
+                      <span className="clients-row-label">Останнє звернення</span>
+                      <span>{lastOrder ? lastOrder.intakeDate : '—'}</span>
+                    </span>
+                    <span className="clients-row-badges">
+                      {clientDebt > 0 && <span className="clients-row-badge is-debt">Борг</span>}
+                      {isRegular && <span className="clients-row-badge is-regular">Постійний</span>}
+                      {clientOrders.length === 0 && <span className="clients-row-badge is-idle">Без замовлень</span>}
+                    </span>
+                  </button>
                 );
               })}
             </div>
@@ -17728,40 +17904,49 @@ function ClientsPage({
           const clientOrders = orders.filter((order) => isSameClientOrder(client, order)).sort((a, b) => (parseDateTime(b.intakeDate)?.getTime() ?? 0) - (parseDateTime(a.intakeDate)?.getTime() ?? 0));
           const selectedOrders = uncontractedOrders.filter((order) => selectedOrderIds.includes(order.id));
           const selectedAmount = selectedOrders.reduce((sum, order) => sum + contractOrderAmount(order), 0);
+          const lastOrder = clientOrders[0];
           return (
             <article className="client-card">
               <div className="panel-heading">
                 <h2>{client.name}</h2>
-                <span>{client.phone}</span>
+                <span>{clientTypeLabel(client.legalType)}</span>
               </div>
-              <div className="manager-order-bottom-meta">
-                <div className="manager-order-field"><strong>ЄДРПОУ / ІПН</strong><div>{client.taxId || 'не вказано'}</div></div>
+              <div className="clients-card-actions">
+                <button type="button" className="submit-button" onClick={() => openQuickOrderForClient(client)}>Нове замовлення</button>
+                <button type="button" onClick={() => openClientEditor(client)}>Редагувати клієнта</button>
+                <button type="button" onClick={() => { setMessageClient(client); messageClientRecord(client); }}>Повідомлення</button>
+              </div>
+              <div className="manager-order-bottom-meta clients-card-meta">
+                <div className="manager-order-field"><strong>Контакт</strong><div>{client.name}</div></div>
+                <div className="manager-order-field"><strong>Телефон</strong><div>{client.phone}</div></div>
                 <div className="manager-order-field"><strong>Email</strong><div>{client.email?.trim() || 'немає email'}</div></div>
-                <div className="manager-order-field"><strong>Замовлення</strong><div>{client.orders}</div></div>
+                <div className="manager-order-field"><strong>Тип</strong><div>{clientTypeLabel(client.legalType)}</div></div>
+                <div className="manager-order-field"><strong>ЄДРПОУ / ІПН</strong><div>{client.taxId || 'не вказано'}</div></div>
+                <div className="manager-order-field"><strong>Адреса</strong><div>{client.address || 'не вказано'}</div></div>
+                <div className="manager-order-field"><strong>Коментар</strong><div>{client.comment || 'без коментаря'}</div></div>
+                <div className="manager-order-field"><strong>Замовлення</strong><div>{clientOrders.length}</div></div>
                 <div className="manager-order-field"><strong>Борг</strong><div>{money(clientDebt)}</div></div>
-                <div className="manager-order-field"><strong>Не оформлено</strong><div>{money(uncontractedAmount)}</div></div>
+                <div className="manager-order-field"><strong>Останній заказ</strong><div>{lastOrder ? lastOrder.id : '—'}</div></div>
+                <div className="manager-order-field"><strong>Останнє звернення</strong><div>{lastOrder ? lastOrder.intakeDate : '—'}</div></div>
                 <div className="manager-order-field"><strong>Баланс</strong><div>{money(clientBalance)}</div></div>
               </div>
 
               <details className="manager-order-collapse" open>
                 <summary>Замовлення клієнта</summary>
-                <div className="table clients-compact-table">
-                  <div className="table-row table-head">
-                    <span>Замовлення</span>
-                    <span>Пристрій</span>
-                    <span>Статус</span>
-                    <span>Сума</span>
-                    <span>Борг</span>
-                  </div>
+                <div className="clients-history-list">
                   {clientOrders.map((order) => (
-                    <div className="table-row" key={order.id}>
-                      <span>{order.id}<small>{order.intakeDate}</small></span>
+                    <div className="clients-history-row" key={order.id}>
+                      <span>
+                        <strong>{order.id}</strong>
+                        <small>{order.intakeDate}</small>
+                      </span>
                       <span>{order.device}</span>
-                      <span>{managerOrderStatusLabel(order.status)}</span>
+                      <span><span className={`manager-order-status-badge ${simpleRepairStatusClass(simpleRepairStatus(order.status))}`}>{managerOrderStatusLabel(order.status)}</span></span>
                       <span>{money(contractOrderAmount(order))}</span>
-                      <span>{money(clientOrderDebt(order))}</span>
+                      <span className={clientOrderDebt(order) > 0 ? 'clients-row-debt' : ''}>{money(clientOrderDebt(order))}</span>
                     </div>
                   ))}
+                  {clientOrders.length === 0 && <div className="empty-state">У клієнта ще немає замовлень.</div>}
                 </div>
               </details>
 
@@ -17842,6 +18027,67 @@ function ClientsPage({
           })()}
         </section>
       </div>
+      {clientEditor && (
+        <div className="manager-order-modal-backdrop" onClick={() => setClientEditor(null)}>
+          <section className="panel manager-order-focus manager-order-modal clients-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="panel-heading">
+              <h2>{clientEditor.mode === 'create' ? 'Новий клієнт' : 'Редагувати клієнта'}</h2>
+              <button type="button" onClick={() => setClientEditor(null)}>Закрити</button>
+            </div>
+            <div className="manager-order-payment-grid">
+              <label>Імʼя / компанія<input value={clientEditor.name} onChange={(event) => setClientEditor((current) => current ? { ...current, name: event.target.value } : current)} /></label>
+              <label>Телефон<input value={clientEditor.phone} onChange={(event) => setClientEditor((current) => current ? { ...current, phone: event.target.value } : current)} /></label>
+              <label>Email<input value={clientEditor.email} onChange={(event) => setClientEditor((current) => current ? { ...current, email: event.target.value } : current)} /></label>
+              <label>ЄДРПОУ / ІПН<input value={clientEditor.taxId} onChange={(event) => setClientEditor((current) => current ? { ...current, taxId: event.target.value } : current)} /></label>
+              <label>Тип клієнта<select value={clientEditor.legalType} onChange={(event) => setClientEditor((current) => current ? { ...current, legalType: event.target.value as 'company' | 'fop' | 'person' } : current)}><option value="person">Фізособа</option><option value="fop">ФОП</option><option value="company">Компанія</option></select></label>
+              <label>Адреса<input value={clientEditor.address} onChange={(event) => setClientEditor((current) => current ? { ...current, address: event.target.value } : current)} /></label>
+              <label className="clients-modal-comment">Коментар<textarea value={clientEditor.comment} onChange={(event) => setClientEditor((current) => current ? { ...current, comment: event.target.value } : current)} rows={4} /></label>
+            </div>
+            <div className="manager-order-inline-actions">
+              <button type="button" onClick={() => setClientEditor(null)}>Скасувати</button>
+              <button
+                type="button"
+                className="submit-button"
+                onClick={() => {
+                  const saved = upsertClient({
+                    originalPhone: clientEditor.originalPhone,
+                    name: clientEditor.name,
+                    phone: clientEditor.phone,
+                    email: clientEditor.email,
+                    taxId: clientEditor.taxId,
+                    legalType: clientEditor.legalType,
+                    address: clientEditor.address,
+                    comment: clientEditor.comment,
+                  });
+                  if (saved) {
+                    focusClient(normalizeImportedPhone(clientEditor.phone));
+                    setClientEditor(null);
+                  }
+                }}
+              >
+                Зберегти клієнта
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+      {messageClient && (
+        <div className="manager-order-modal-backdrop" onClick={() => setMessageClient(null)}>
+          <section className="panel manager-order-focus manager-order-modal clients-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="panel-heading">
+              <h2>Повідомлення клієнту</h2>
+              <button type="button" onClick={() => setMessageClient(null)}>Закрити</button>
+            </div>
+            <div className="details-grid">
+              <Info label="Клієнт" value={messageClient.name} />
+              <Info label="Телефон" value={messageClient.phone} />
+              <Info label="Email" value={messageClient.email?.trim() || 'немає email'} />
+              <Info label="Тип" value={clientTypeLabel(messageClient.legalType)} />
+            </div>
+            <div className="empty-state">Інтеграцію повідомлень можна підключити пізніше. Контакти клієнта вже під рукою.</div>
+          </section>
+        </div>
+      )}
     </div>
   );
 }
