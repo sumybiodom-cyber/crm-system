@@ -25,6 +25,7 @@ import {
   ShoppingCart,
   Truck,
   Users,
+  Wallet,
   Wrench,
   X,
 } from 'lucide-react';
@@ -123,7 +124,7 @@ type ClientRecord = {
 
 type ContractStatus = 'Активний' | 'Закритий';
 type ContractActStatus = 'Не оплачено' | 'Частично оплачен' | 'Оплачен';
-type SimpleLedgerEntityType = 'order' | 'contract' | 'act' | 'client';
+type SimpleLedgerEntityType = 'order' | 'contract' | 'act' | 'client' | 'sale';
 type SimpleLedgerPaymentKind = 'предоплата' | 'оплата' | 'частичная';
 type SimpleLedgerPaymentStatus = 'черновик' | 'ожидается' | 'проведено' | 'ожидает поступления' | 'подтвержден' | 'скасовано' | 'повернення';
 type BankImportItemStatus = 'matched' | 'review' | 'unmatched';
@@ -220,6 +221,8 @@ type SimpleOrderPaymentRecord = {
   paymentKind: SimpleLedgerPaymentKind;
   status: SimpleLedgerPaymentStatus;
   date: string;
+  createdAt?: string;
+  userId?: string;
   currency?: string;
   payer?: string;
   taxId?: string;
@@ -2220,6 +2223,8 @@ function loadSimplePaymentsFromStorage(): SimpleOrderPaymentRecord[] {
           paymentKind: payment.paymentKind ?? 'оплата',
           status: payment.status ?? 'подтвержден',
           date: payment.date ?? today,
+          createdAt: payment.createdAt ?? payment.date ?? today,
+          userId: typeof payment.userId === 'string' ? payment.userId : undefined,
           currency: payment.currency,
           payer: payment.payer,
           taxId: normalizeTaxId(payment.taxId),
@@ -5860,6 +5865,8 @@ useEffect(() => {
       paymentKind,
       status: ledgerStatus,
       date: today,
+      createdAt: today,
+      userId: activeUser.id,
       acceptedBy: activeUser.name,
       cashShiftId: paymentType === 'перевод' ? undefined : cashShift.id,
       countedAtShiftId: paymentType === 'перевод' ? undefined : cashShift.id,
@@ -6417,6 +6424,8 @@ useEffect(() => {
       paymentKind: 'оплата',
       status: 'подтвержден',
       date: row.date || today,
+      createdAt: row.date || today,
+      userId: activeUser.id,
       currency: row.currency,
       payer: row.payer,
       taxId: normalizeTaxId(row.taxId),
@@ -8611,6 +8620,8 @@ useEffect(() => {
       paymentKind: 'оплата',
       status: 'подтвержден',
       date: today,
+      createdAt: today,
+      userId: activeUser.id,
       direction: 'outgoing',
       purpose: [reasonText || 'Повернення коштів', commentText].filter(Boolean).join(' · '),
     };
@@ -9298,9 +9309,37 @@ useEffect(() => {
     const type = paymentTypeFor(amount, saleTotals(sale).debt || amount, comment === 'Часткова оплата' ? 'Часткова оплата' : 'Повна оплата');
     const transactionNo = method === 'Картка' ? uid('TERM') : method === 'Безготівка' ? uid('BANK') : uid('CASH');
     const status: Payment['status'] = method === 'Безготівка' ? 'Очікує надходження' : method === 'Картка' ? 'Проведено' : 'Підтверджено';
+    const paymentId = uid('PAY');
+    const simpleMethod: SimpleOrderPaymentRecord['method'] = method === 'Картка' ? 'карта' : method === 'Безготівка' ? 'перевод' : 'наличные';
+    const simpleStatus: SimpleOrderPaymentRecord['status'] = method === 'Безготівка' ? 'ожидает поступления' : method === 'Картка' ? 'проведено' : 'подтвержден';
     patchSale(sale.id, (item) => {
-      const next = { ...item, payments: [...item.payments, { id: uid('PAY'), date: today, amount, method, type, transactionNo, acceptedBy: activeUser.name, saleId: sale.id, comment, status, cashShiftId: method === 'Безготівка' ? undefined : cashShift.id, countedAtShiftId: method === 'Безготівка' ? undefined : cashShift.id }] };
+      const next = { ...item, payments: [...item.payments, { id: paymentId, date: today, amount, method, type, transactionNo, acceptedBy: activeUser.name, saleId: sale.id, comment, status, cashShiftId: method === 'Безготівка' ? undefined : cashShift.id, countedAtShiftId: method === 'Безготівка' ? undefined : cashShift.id }] };
       return { ...next, status: updateSaleStatus(next) };
+    });
+    setSimplePayments((current) => {
+      const salePaymentRecord: SimpleOrderPaymentRecord = {
+        id: paymentId,
+        client: sale.client,
+        entityType: 'sale',
+        entityId: sale.id,
+        amount,
+        method: simpleMethod,
+        paymentKind: 'оплата',
+        status: simpleStatus,
+        date: today,
+        createdAt: today,
+        userId: activeUser.id,
+        purpose: comment,
+        acceptedBy: activeUser.name,
+        cashShiftId: method === 'Безготівка' ? undefined : cashShift.id,
+        countedAtShiftId: method === 'Безготівка' ? undefined : cashShift.id,
+      };
+      const nextPayments = [
+        salePaymentRecord,
+        ...current,
+      ];
+      saveSimplePaymentsToStorage(nextPayments);
+      return nextPayments;
     });
     if (method !== 'Безготівка') registerCashPayment(amount, method);
     logAction('Прийом оплати продажу', sale.id, `${method}: ${money(amount)}. ${comment}`);
@@ -10095,7 +10134,7 @@ useEffect(() => {
             canDo={canDo}
           />
         )}
-        {canViewPage(page) && page === 'cash' && <CashPage orders={orders} sales={sales} cashShift={cashShift} activeUser={viewUser} confirmBankPayment={confirmBankPayment} openCashShift={openCashShift} closeCashShift={closeCashShift} cancelPayment={cancelPayment} refundPayment={refundPayment} />}
+        {canViewPage(page) && page === 'cash' && <CashPage simplePayments={simplePayments} cashShift={cashShift} activeUser={viewUser} confirmBankPayment={confirmBankPayment} openCashShift={openCashShift} closeCashShift={closeCashShift} cancelPayment={cancelPayment} refundPayment={refundPayment} />}
         {canViewPage(page) && page === 'returns' && <ReturnsPage sales={sales} orders={orders} products={products} productName={productName} />}
         {canViewPage(page) && page === 'documents' && <DocumentsPage documents={documents} templates={documentTemplates} />}
         {canViewPage(page) && page === 'tax-invoices' && <TaxInvoicesPage invoices={taxInvoices} orders={orders} createTaxInvoiceForOrder={createTaxInvoiceForOrder} registerTaxInvoice={registerTaxInvoice} />}
@@ -16218,8 +16257,7 @@ function PurchasesPage({
 }
 
 function CashPage({
-  orders,
-  sales,
+  simplePayments,
   cashShift,
   activeUser,
   confirmBankPayment,
@@ -16228,8 +16266,7 @@ function CashPage({
   cancelPayment,
   refundPayment,
 }: {
-  orders: ServiceOrder[];
-  sales: Sale[];
+  simplePayments: SimpleOrderPaymentRecord[];
   cashShift: CashShift;
   activeUser: User;
   confirmBankPayment: (paymentId: string) => void;
@@ -16241,6 +16278,16 @@ function CashPage({
   const [openingCash, setOpeningCash] = useState(String(cashShift.openingCash || '0'));
   const [actualCash, setActualCash] = useState('');
   const [shiftComment, setShiftComment] = useState('');
+  const [dateFilter, setDateFilter] = useState<'today' | 'yesterday' | 'period'>('today');
+  const [methodFilter, setMethodFilter] = useState<'all' | 'наличные' | 'карта' | 'перевод'>('all');
+  const [periodFrom, setPeriodFrom] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  });
+  const [periodTo, setPeriodTo] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  });
   const [paymentActionDraft, setPaymentActionDraft] = useState<null | {
     paymentId: string;
     action: 'cancel' | 'refund';
@@ -16248,11 +16295,28 @@ function CashPage({
     reason: string;
     method: PaymentMethod;
   }>(null);
-  const salePayments = sales.flatMap((sale) => sale.payments.map((payment) => ({ ...payment, client: sale.client, document: sale.id, kind: 'sale' as const })));
-  const orderPayments = orders.flatMap((order) => order.payments.map((payment) => ({ ...payment, client: order.client, document: order.id, kind: 'order' as const })));
-  const payments = [...salePayments, ...orderPayments].sort((a, b) => b.date.localeCompare(a.date));
+  const payments = [...simplePayments]
+    .sort((a, b) => (parseDateTime(b.createdAt ?? b.date)?.getTime() ?? 0) - (parseDateTime(a.createdAt ?? a.date)?.getTime() ?? 0));
   const expectedCash = expectedCashAmount(cashShift);
-  const unconfirmedPayments = payments.filter((payment) => paymentNeedsConfirmation(payment));
+  const todayDate = parseDateTime(today) ?? new Date();
+  const yesterdayDate = new Date(todayDate);
+  yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+  const filteredPayments = payments.filter((payment) => {
+    if (methodFilter !== 'all' && payment.method !== methodFilter) return false;
+    const paymentDate = parseDateTime(payment.createdAt ?? payment.date);
+    if (!paymentDate) return false;
+    if (dateFilter === 'today') return extractDayKey(payment.createdAt ?? payment.date) === extractDayKey(today);
+    if (dateFilter === 'yesterday') return extractDayKey(payment.createdAt ?? payment.date) === extractDayKey(`${String(yesterdayDate.getDate()).padStart(2, '0')}.${String(yesterdayDate.getMonth() + 1).padStart(2, '0')}.${yesterdayDate.getFullYear()}`);
+    const fromDate = new Date(`${periodFrom}T00:00:00`);
+    const toDate = new Date(`${periodTo}T23:59:59`);
+    return paymentDate >= fromDate && paymentDate <= toDate;
+  });
+  const incomingPayments = filteredPayments.filter((payment) => (payment.direction ?? 'incoming') !== 'outgoing' && payment.amount > 0);
+  const unconfirmedPayments = filteredPayments.filter((payment) => payment.status === 'ожидает поступления');
+  const totalAmount = incomingPayments.reduce((sum, payment) => sum + payment.amount, 0);
+  const cashTotal = incomingPayments.filter((payment) => payment.method === 'наличные').reduce((sum, payment) => sum + payment.amount, 0);
+  const cardTotal = incomingPayments.filter((payment) => payment.method === 'карта').reduce((sum, payment) => sum + payment.amount, 0);
+  const bankTotal = incomingPayments.filter((payment) => payment.method === 'перевод').reduce((sum, payment) => sum + payment.amount, 0);
   const closeDifferencePreview = actualCash.trim() ? Number(actualCash) - expectedCash : 0;
 
   useEffect(() => {
@@ -16284,9 +16348,54 @@ function CashPage({
     setPaymentActionDraft(null);
   };
 
+  const paymentMethodLabel = (method: SimpleOrderPaymentRecord['method']) => (
+    method === 'карта' ? 'Термінал' : method === 'перевод' ? 'Безготівка' : 'Готівка'
+  );
+  const paymentMethodValue = (method: SimpleOrderPaymentRecord['method']): PaymentMethod => (
+    method === 'карта' ? 'Картка' : method === 'перевод' ? 'Безготівка' : 'Готівка'
+  );
+
+  const paymentStatusLabel = (status: SimpleOrderPaymentRecord['status']) => (
+    status === 'подтвержден' ? 'Підтверджено'
+      : status === 'проведено' ? 'Проведено'
+      : status === 'ожидает поступления' ? 'Очікує надходження'
+      : 'Скасовано'
+  );
+
   return (
     <div className="page-grid">
-      <PageTitle eyebrow="Оплати / Каса" title="Каса, термінал, безготівка і контроль зміни" text="Кожен платіж прив'язаний до співробітника, способу оплати і касової зміни." />
+      <PageTitle eyebrow="Оплати / Каса" title="Каса, термінал, безготівка і контроль зміни" text="Усі оплати збираються в єдиний журнал із фільтрами по даті, способу оплати і співробітнику." />
+      <section className="panel executive-panel finance-center-filters">
+        <div className="quick-actions">
+          <button type="button" className={dateFilter === 'today' ? 'primary' : ''} onClick={() => setDateFilter('today')}>Сьогодні</button>
+          <button type="button" className={dateFilter === 'yesterday' ? 'primary' : ''} onClick={() => setDateFilter('yesterday')}>Вчора</button>
+          <button type="button" className={dateFilter === 'period' ? 'primary' : ''} onClick={() => setDateFilter('period')}>Період</button>
+          <select value={methodFilter} onChange={(event) => setMethodFilter(event.target.value as 'all' | 'наличные' | 'карта' | 'перевод')}>
+            <option value="all">Усі способи</option>
+            <option value="наличные">Готівка</option>
+            <option value="карта">Термінал</option>
+            <option value="перевод">Безготівка</option>
+          </select>
+        </div>
+        {dateFilter === 'period' && (
+          <div className="table purchase-detail-form">
+            <label>
+              Від
+              <input type="date" value={periodFrom} onChange={(event) => setPeriodFrom(event.target.value)} />
+            </label>
+            <label>
+              До
+              <input type="date" value={periodTo} onChange={(event) => setPeriodTo(event.target.value)} />
+            </label>
+          </div>
+        )}
+      </section>
+      <section className="stats-grid">
+        <Metric icon={<Wallet />} label={dateFilter === 'today' ? 'Сума за сьогодні' : dateFilter === 'yesterday' ? 'Сума за вчора' : 'Сума за період'} value={money(totalAmount)} hint={`${filteredPayments.length} платежів`} />
+        <Metric icon={<Banknote />} label="Готівка" value={money(cashTotal)} hint="за вибраний період" />
+        <Metric icon={<CheckCircle2 />} label="Термінал" value={money(cardTotal)} hint="за вибраний період" />
+        <Metric icon={<Archive />} label="Безготівка" value={money(bankTotal)} hint="за вибраний період" />
+      </section>
       <section className="stats-grid">
         <Metric icon={<Banknote />} label="Готівка в касі" value={money(expectedCash)} hint={cashShift.status === 'Відкрита' ? `зміна ${cashShift.id}` : 'зміна закрита'} />
         <Metric icon={<CheckCircle2 />} label="Термінал" value={money(cashShift.cardIncome)} hint="проведені карткою" />
@@ -16334,7 +16443,7 @@ function CashPage({
         )}
       </section>
       <section className="panel">
-        <div className="panel-heading"><h2>Контроль грошей</h2><span>{payments.length} операцій</span></div>
+        <div className="panel-heading"><h2>Контроль грошей</h2><span>{filteredPayments.length} операцій</span></div>
         <div className="info-grid">
           <Info label="Готівка на початок" value={money(cashShift.openingCash || 0)} />
           <Info label="Готівкові оплати" value={money(cashShift.cashIncome)} />
@@ -16345,28 +16454,31 @@ function CashPage({
         </div>
       </section>
       <section className="panel">
-        <div className="panel-heading"><h2>Журнал каси</h2><span>{payments.length} операцій</span></div>
+        <div className="panel-heading"><h2>Журнал каси</h2><span>{filteredPayments.length} операцій</span></div>
         <div className="table payments-table">
           <div className="table-row table-head"><span>Дата</span><span>Клієнт</span><span>Документ</span><span>Сума</span><span>Спосіб</span><span>Статус</span><span>Співробітник</span></div>
-          {payments.map((payment) => {
-            const canReverse = payment.amount > 0 && paymentCountsAsApplied(payment) && !['Скасовано', 'Повернення'].includes(payment.status ?? '');
+          {filteredPayments.map((payment) => {
+            const canReverse = payment.amount > 0
+              && ['подтвержден', 'проведено'].includes(payment.status)
+              && ['order', 'sale'].includes(payment.entityType);
             return (
               <div className="table-row" key={payment.id}>
-                <span>{payment.date}</span>
+                <span>{payment.createdAt ?? payment.date}</span>
                 <span>{payment.client}</span>
-                <span>{payment.document}</span>
+                <span>{payment.entityId}</span>
                 <span>{money(payment.amount)}</span>
-                <span>{payment.method}<small>{payment.cashShiftId || payment.transactionNo}</small></span>
+                <span>{paymentMethodLabel(payment.method)}<small>{payment.cashShiftId || payment.documentRef || payment.id}</small></span>
                 <span>
-                  {paymentProcessingLabel(payment)}
-                  {paymentNeedsConfirmation(payment) && ['Бухгалтер', 'Менеджер', 'Адміністратор'].includes(activeUser.role) ? <button type="button" onClick={() => confirmBankPayment(payment.id)}>Підтвердити</button> : null}
-                  {canReverse ? <button type="button" onClick={() => setPaymentActionDraft({ paymentId: payment.id, action: 'cancel', amount: String(Math.abs(payment.amount)), reason: 'Скасування платежу', method: payment.method })}>Скасувати</button> : null}
-                  {canReverse ? <button type="button" onClick={() => setPaymentActionDraft({ paymentId: payment.id, action: 'refund', amount: String(Math.abs(payment.amount)), reason: 'Повернення коштів', method: payment.method })}>Повернення</button> : null}
+                  {paymentStatusLabel(payment.status)}
+                  {payment.status === 'ожидает поступления' && ['Бухгалтер', 'Менеджер', 'Адміністратор'].includes(activeUser.role) && ['order', 'sale'].includes(payment.entityType) ? <button type="button" onClick={() => confirmBankPayment(payment.id)}>Підтвердити</button> : null}
+                  {canReverse ? <button type="button" onClick={() => setPaymentActionDraft({ paymentId: payment.id, action: 'cancel', amount: String(Math.abs(payment.amount)), reason: 'Скасування платежу', method: paymentMethodValue(payment.method) })}>Скасувати</button> : null}
+                  {canReverse ? <button type="button" onClick={() => setPaymentActionDraft({ paymentId: payment.id, action: 'refund', amount: String(Math.abs(payment.amount)), reason: 'Повернення коштів', method: paymentMethodValue(payment.method) })}>Повернення</button> : null}
                 </span>
-                <span>{payment.acceptedBy}</span>
+                <span>{payment.acceptedBy || payment.userId || '—'}</span>
               </div>
             );
           })}
+          {filteredPayments.length === 0 && <div className="empty-state">Платежів за вибраним фільтром немає.</div>}
         </div>
         {paymentActionDraft && (
           <div className="panel-subsection">
