@@ -120,6 +120,8 @@ type Product = {
 type ClientRecord = {
   name: string;
   phone: string;
+  telegramId?: string;
+  notificationChannel?: 'telegram' | 'sms' | 'both' | 'none';
   email?: string;
   taxId?: string;
   legalType?: 'company' | 'fop' | 'person';
@@ -743,7 +745,7 @@ type ReleaseActStatus = 'Не створено' | 'Роздруковано' | '
 type ActionType = 'Оплатити' | 'Підтвердити оплату' | 'Роздрукувати акт' | 'Підписати акт' | 'Видати' | 'Перейти до ремонту';
 
 type NotificationChannel = 'SMS' | 'Telegram' | 'Viber' | 'Email';
-type NotificationStatus = 'Створено' | 'Скопійовано' | 'Відправлено' | 'Помилка' | 'Вимкнено';
+type NotificationStatus = 'pending' | 'sent' | 'failed' | 'test' | 'disabled';
 type NotificationEvent =
   | 'Прийом пристрою'
   | 'Діагностика розпочата'
@@ -763,10 +765,12 @@ type NotificationEvent =
 type ClientNotification = {
   id: string;
   orderId: string;
+  clientId: string;
   client: string;
   phone: string;
   channel: NotificationChannel;
   event: NotificationEvent;
+  templateKey: 'order_created' | 'order_in_progress' | 'order_ready' | 'order_issued' | 'debt_reminder' | 'custom';
   message: string;
   status: NotificationStatus;
   createdAt: string;
@@ -1690,19 +1694,19 @@ const documentPrefix: Record<DocumentKind, string> = {
 };
 
 const clientNotificationTemplates: ClientNotificationTemplate[] = [
-  { event: 'Прийом пристрою', channel: 'SMS', enabled: true, text: 'Ваше замовлення №{order} прийнято. Пристрій: {device}. Очікуйте діагностику.' },
-  { event: 'Діагностика розпочата', channel: 'SMS', enabled: true, text: 'Замовлення №{order}. Діагностику пристрою {device} розпочато.' },
+  { event: 'Прийом пристрою', channel: 'SMS', enabled: true, text: 'Ваше замовлення {orderNumber} прийнято. Пристрій: {device}.' },
+  { event: 'Діагностика розпочата', channel: 'SMS', enabled: true, text: 'Ваше замовлення {orderNumber} передано в ремонт.' },
   { event: 'Діагностика завершена', channel: 'SMS', enabled: true, text: 'Замовлення №{order}. Виявлено проблему: {problem}. Вартість ремонту: {amount}. Відповідь: 1 — згоден, 2 — відмовитись.' },
   { event: 'Потрібне погодження додаткових робіт', channel: 'SMS', enabled: true, text: 'Додаткові роботи по замовленню №{order}: {extraWorkDescription}. Сума: {extraWorkAmount}. Відповідь: 1 — згоден, 2 — відмова.' },
   { event: 'Погодження прийнято', channel: 'Viber', enabled: true, text: 'Замовлення №{order}. Додаткові роботи погоджено. Загальна сума: {amount}.' },
   { event: 'Погодження відхилено', channel: 'Viber', enabled: true, text: 'Замовлення №{order}. Відмову від додаткових робіт зафіксовано. Телефон сервісу: {servicePhone}.' },
   { event: 'Очікування запчастини', channel: 'SMS', enabled: true, text: 'Замовлення №{order}. Очікуємо запчастину. Орієнтовний строк: {date}.' },
-  { event: 'Ремонт розпочато', channel: 'SMS', enabled: true, text: 'Замовлення №{order}. Ваш заказ уже в роботі: {device}.' },
+  { event: 'Ремонт розпочато', channel: 'SMS', enabled: true, text: 'Ваше замовлення {orderNumber} передано в ремонт.' },
   { event: 'Ремонт завершено', channel: 'SMS', enabled: true, text: 'Замовлення №{order}. Ремонт завершено. Сума: {amount}.' },
-  { event: 'Готово до видачі', channel: 'SMS', enabled: true, text: 'Замовлення №{order} готове. Сума до оплати: {amount}. Забрати: {serviceAddress}. Працюємо до {serviceHours}.' },
+  { event: 'Готово до видачі', channel: 'SMS', enabled: true, text: 'Ваше замовлення {orderNumber} готове до видачі. До сплати: {debt} грн.' },
   { event: 'Очікує оплату', channel: 'SMS', enabled: true, text: 'Замовлення №{order} очікує оплату. До сплати: {amount}.' },
-  { event: 'Нагадування', channel: 'SMS', enabled: true, text: 'Замовлення №{order} готове та чекає на вас. Через 5 днів нараховується зберігання.' },
-  { event: 'Видача', channel: 'SMS', enabled: true, text: 'Замовлення №{order} видано. Дякуємо за звернення.' },
+  { event: 'Нагадування', channel: 'SMS', enabled: true, text: 'Нагадування: по замовленню {orderNumber} залишок до сплати {debt} грн.' },
+  { event: 'Видача', channel: 'SMS', enabled: true, text: 'Ваше замовлення {orderNumber} видано. Дякуємо!' },
   { event: 'Замовлення затримується', channel: 'SMS', enabled: true, text: 'Замовлення №{order} зберігається понад {days} днів. Просимо забрати найближчим часом.' },
   { event: 'Готово до видачі', channel: 'Email', enabled: false, text: 'Ваше замовлення {order} готове до видачі. Сума: {amount}.' },
 ];
@@ -1711,12 +1715,14 @@ const initialClientNotifications: ClientNotification[] = [
   {
     id: 'MSG-1',
     orderId: 'ЗН-1047',
+    clientId: '380443018820',
     client: 'ТОВ "Альфа-Сервіс"',
     phone: '+380 44 301 88 20',
     channel: 'SMS',
     event: 'Прийом пристрою',
+    templateKey: 'order_created',
     message: 'ТОВ "Альфа-Сервіс", ваш пристрій прийнято. Номер замовлення: ЗН-1047.',
-    status: 'Відправлено',
+    status: 'sent',
     createdAt: '18.04.2026 10:15',
     sentAt: '18.04.2026 10:15',
   },
@@ -2012,12 +2018,12 @@ const acceptanceChecklist = [
 ];
 
 const initialClients: ClientRecord[] = [
-  { name: 'Олена Коваленко', phone: '+380 67 441 28 10', taxId: '', legalType: 'person', orders: 3 },
-  { name: 'ТОВ "Альфа-Сервіс"', phone: '+380 44 301 88 20', taxId: '41234567', legalType: 'company', orders: 12 },
-  { name: 'Ігор Мельник', phone: '+380 50 617 73 04', taxId: '', legalType: 'person', orders: 2 },
-  { name: 'Наталія Романюк', phone: '+380 93 118 45 66', taxId: '', legalType: 'person', orders: 5 },
-  { name: 'ТОВ "Демо ПДВ"', phone: '+380 44 555 10 50', taxId: '44556677', legalType: 'company', orders: 1 },
-  { name: 'ТОВ "TEST ПН"', phone: '+380 44 555 10 51', taxId: '44556678', legalType: 'company', orders: 1 },
+  { name: 'Олена Коваленко', phone: '+380 67 441 28 10', notificationChannel: 'sms', taxId: '', legalType: 'person', orders: 3 },
+  { name: 'ТОВ "Альфа-Сервіс"', phone: '+380 44 301 88 20', telegramId: '@alfa_service', notificationChannel: 'both', taxId: '41234567', legalType: 'company', orders: 12 },
+  { name: 'Ігор Мельник', phone: '+380 50 617 73 04', notificationChannel: 'sms', taxId: '', legalType: 'person', orders: 2 },
+  { name: 'Наталія Романюк', phone: '+380 93 118 45 66', telegramId: '@natalia_r', notificationChannel: 'telegram', taxId: '', legalType: 'person', orders: 5 },
+  { name: 'ТОВ "Демо ПДВ"', phone: '+380 44 555 10 50', notificationChannel: 'sms', taxId: '44556677', legalType: 'company', orders: 1 },
+  { name: 'ТОВ "TEST ПН"', phone: '+380 44 555 10 51', notificationChannel: 'none', taxId: '44556678', legalType: 'company', orders: 1 },
 ];
 
 const payrollRules: PayrollRule[] = [
@@ -2101,6 +2107,10 @@ function loadClientsFromStorage(): ClientRecord[] {
       ? mergeSeededClients(parsed.map((client) => ({
           name: String(client.name ?? '').trim(),
           phone: normalizeImportedPhone(client.phone),
+          telegramId: client.telegramId ? String(client.telegramId).trim() : undefined,
+          notificationChannel: client.notificationChannel === 'telegram' || client.notificationChannel === 'sms' || client.notificationChannel === 'both' || client.notificationChannel === 'none'
+            ? client.notificationChannel
+            : 'sms',
           email: client.email ? String(client.email).trim() : undefined,
           taxId: normalizeTaxId(client.taxId),
           legalType: client.legalType === 'company' || client.legalType === 'fop' || client.legalType === 'person'
@@ -2119,6 +2129,8 @@ function loadClientsFromStorage(): ClientRecord[] {
 function saveClientsToStorage(clients: ClientRecord[]) {
   localStorage.setItem(CLIENTS_STORAGE_KEY, JSON.stringify(clients.map((client) => ({
     ...client,
+    telegramId: client.telegramId?.trim() || undefined,
+    notificationChannel: client.notificationChannel ?? 'sms',
     taxId: normalizeTaxId(client.taxId),
     legalType: client.legalType ?? inferClientLegalType(client),
     address: client.address?.trim() || undefined,
@@ -3758,7 +3770,7 @@ function buildOrderControlState(order: ServiceOrder, allOrders: ServiceOrder[], 
   const normalizedPhone = normalizePhone(order.phone);
   const relatedUnits = units.filter((unit) => unit.orderId === order.id);
   const duplicateOrders = allOrders.filter((item) => item.id !== order.id && normalizePhone(item.phone) === normalizedPhone && item.device.trim().toLowerCase() === order.device.trim().toLowerCase() && !['Закрито', 'Скасовано'].includes(item.status));
-  const hasSentNotification = notifications.some((item) => item.status === 'Відправлено');
+  const hasSentNotification = notifications.some((item) => item.status === 'sent' || item.status === 'test');
   const missingStorageCell = relatedUnits.some((unit) => unit.status === 'На полці' && !unit.locationCode) || (
     ['Готовий до видачі', 'Очікує оплати', 'Очікує клієнта'].includes(order.status)
     && relatedUnits.length > 0
@@ -3804,6 +3816,23 @@ function notificationTemplateForEvent(event: NotificationEvent) {
   return clientNotificationTemplates.find((item) => item.event === event && item.enabled);
 }
 
+function notificationTemplateKeyForEvent(event: NotificationEvent): ClientNotification['templateKey'] {
+  if (event === 'Прийом пристрою') return 'order_created';
+  if (event === 'Ремонт розпочато' || event === 'Діагностика розпочата') return 'order_in_progress';
+  if (event === 'Готово до видачі') return 'order_ready';
+  if (event === 'Видача') return 'order_issued';
+  if (event === 'Нагадування' || event === 'Очікує оплату') return 'debt_reminder';
+  return 'custom';
+}
+
+function notificationStatusLabel(status: NotificationStatus) {
+  if (status === 'test') return 'test';
+  if (status === 'pending') return 'pending';
+  if (status === 'sent') return 'sent';
+  if (status === 'failed') return 'failed';
+  return 'disabled';
+}
+
 function renderNotificationText(order: ServiceOrder, event: NotificationEvent, days = 3, extra?: { extraWorkDescription?: string; extraWorkAmount?: number; comment?: string }) {
   const template = notificationTemplateForEvent(event);
   if (!template) return `${order.client}, статус заказа ${order.id}: ${notificationDisplay(event)}.`;
@@ -3811,7 +3840,9 @@ function renderNotificationText(order: ServiceOrder, event: NotificationEvent, d
   return template.text
     .split('{client}').join(order.client)
     .split('{order}').join(order.id)
+    .split('{orderNumber}').join(order.id)
     .split('{amount}').join(money(totals.total))
+    .split('{debt}').join(String(Math.max(Math.round(totals.debt), 0)))
     .split('{extraWorkAmount}').join(extra?.extraWorkAmount ? money(extra.extraWorkAmount) : money(0))
     .split('{extraWorkDescription}').join(extra?.extraWorkDescription ?? 'додаткові роботи уточнюються')
     .split('{days}').join(String(days))
@@ -5036,6 +5067,8 @@ useEffect(() => {
     originalPhone?: string;
     name: string;
     phone: string;
+    telegramId?: string;
+    notificationChannel?: 'telegram' | 'sms' | 'both' | 'none';
     email?: string;
     taxId?: string;
     legalType?: 'company' | 'fop' | 'person';
@@ -5048,6 +5081,8 @@ useEffect(() => {
     const nextClient: ClientRecord = {
       name: payload.name.trim(),
       phone: normalizedPhone,
+      telegramId: payload.telegramId?.trim() || undefined,
+      notificationChannel: payload.notificationChannel ?? 'sms',
       email: payload.email?.trim() || undefined,
       taxId: normalizedTaxId,
       legalType: payload.legalType ?? inferClientLegalType(payload),
@@ -6963,107 +6998,127 @@ useEffect(() => {
     }
   }
 
+  function notificationClientId(order: ServiceOrder) {
+    return extractDigits(order.phone) || normalizeLooseText(order.client);
+  }
+
+  function notificationChannelsForClient(order: ServiceOrder, preferredChannel?: NotificationChannel) {
+    if (preferredChannel) return [preferredChannel];
+    const client = findClientRecord(customerList, order.client, order.phone, clientTaxId(order.client, order.phone));
+    const preference = client?.notificationChannel ?? 'sms';
+    if (preference === 'none') return [] as NotificationChannel[];
+    if (preference === 'telegram') return ['Telegram'] as NotificationChannel[];
+    if (preference === 'both') return ['Telegram', 'SMS'] as NotificationChannel[];
+    return ['SMS'] as NotificationChannel[];
+  }
+
   function enqueueClientNotification(order: ServiceOrder, event: NotificationEvent, preferredChannel?: NotificationChannel, manual = false, messageOverride?: string) {
     const template = notificationTemplates.find((item) => item.event === event && item.enabled);
-    const channel = preferredChannel ?? template?.channel ?? 'SMS';
-
-    if (!order.phone.trim()) {
-      const failed: ClientNotification = {
-        id: uid('MSG'),
-        orderId: order.id,
-        client: order.client,
-        phone: order.phone,
-        channel,
-        event,
-        message: messageOverride ?? `Неможливо надіслати "${event}": у клієнта немає телефону.`,
-        status: 'Помилка',
-        createdAt: today,
-        createdBy: activeUser.name,
-        error: 'Не вказано номер телефону клієнта.',
-      };
-      setClientNotifications((current) => [failed, ...current]);
-      persistOrdersUpdate((current) => current.map((item) => (
-        item.id !== order.id
-          ? item
-          : {
-              ...item,
-              lastNotificationType: event,
-              lastNotificationAt: today,
-              notificationHistory: [failed, ...(item.notificationHistory ?? [])],
-            }
-      )));
-      logAction('Помилка повідомлення клієнту', order.id, `${channel}: ${event}. Не вказано номер телефону.`);
-      setNotice(`Повідомлення клієнту не надіслано: для ${order.id} не вказано телефон.`);
-      return;
-    }
+    const channels = notificationChannelsForClient(order, preferredChannel ?? template?.channel);
+    const client = findClientRecord(customerList, order.client, order.phone, clientTaxId(order.client, order.phone));
+    const templateKey = notificationTemplateKeyForEvent(event);
 
     if (!template) {
-      const disabled: ClientNotification = {
+      setNotice(`Повідомлення не створено: шаблон "${event}" вимкнено.`);
+      return;
+    }
+    if (channels.length === 0) {
+      setNotice(`Для клієнта ${order.client} вимкнено автоматичні сповіщення.`);
+      return;
+    }
+
+    const createdNotifications: ClientNotification[] = [];
+    channels.forEach((channel) => {
+      const duplicate = clientNotifications.some((item) => item.orderId === order.id && item.event === event && item.channel === channel && ['test', 'sent', 'pending'].includes(item.status));
+      if (duplicate && !manual) return;
+      if (channel === 'SMS' && !order.phone.trim()) {
+        const failed: ClientNotification = {
+          id: uid('MSG'),
+          orderId: order.id,
+          clientId: notificationClientId(order),
+          client: order.client,
+          phone: order.phone,
+          channel,
+          event,
+          templateKey,
+          message: messageOverride ?? `Неможливо створити SMS для "${event}": у клієнта немає телефону.`,
+          status: 'failed',
+          createdAt: today,
+          createdBy: activeUser.name,
+          error: 'Не вказано номер телефону клієнта.',
+        };
+        createdNotifications.push(failed);
+        return;
+      }
+      if (channel === 'Telegram' && !client?.telegramId?.trim()) {
+        const failed: ClientNotification = {
+          id: uid('MSG'),
+          orderId: order.id,
+          clientId: notificationClientId(order),
+          client: order.client,
+          phone: order.phone,
+          channel,
+          event,
+          templateKey,
+          message: messageOverride ?? `Неможливо створити Telegram-повідомлення для "${event}": у клієнта немає telegramId.`,
+          status: 'failed',
+          createdAt: today,
+          createdBy: activeUser.name,
+          error: 'Не вказано telegramId клієнта.',
+        };
+        createdNotifications.push(failed);
+        return;
+      }
+      createdNotifications.push({
         id: uid('MSG'),
         orderId: order.id,
+        clientId: notificationClientId(order),
         client: order.client,
         phone: order.phone,
         channel,
         event,
-        message: `Шаблон для події "${event}" вимкнено.`,
-        status: 'Вимкнено',
+        templateKey,
+        message: messageOverride ?? renderNotificationText(order, event),
+        status: 'test',
         createdAt: today,
-      };
-      setClientNotifications((current) => [disabled, ...current]);
-      setNotice(`Повідомлення не відправлено: шаблон "${event}" вимкнено.`);
-      return;
-    }
-
-    const alreadySentToday = clientNotifications.some((item) => item.orderId === order.id && item.event === event && item.channel === channel && item.createdAt === today && item.status === 'Відправлено');
-    if (alreadySentToday && !manual) {
-      setNotice(`CRM не спамить клієнта: ${event} вже відправлено сьогодні.`);
-      return;
-    }
-
-    const notification: ClientNotification = {
-      id: uid('MSG'),
-      orderId: order.id,
-      client: order.client,
-      phone: order.phone,
-      channel,
-      event,
-      message: messageOverride ?? renderNotificationText(order, event),
-      status: 'Відправлено',
-      createdAt: today,
-      createdBy: activeUser.name,
-      templateName: notificationDisplay(event),
-      sentAt: today,
-    };
-    setClientNotifications((current) => [notification, ...current]);
+        createdBy: activeUser.name,
+        templateName: notificationDisplay(event),
+        sentAt: today,
+      });
+    });
+    if (createdNotifications.length === 0) return;
+    setClientNotifications((current) => [...createdNotifications, ...current]);
     setOrders((current) => current.map((item) => (
       item.id !== order.id
         ? item
         : {
             ...item,
-            clientNotified: true,
+            clientNotified: createdNotifications.some((notification) => notification.status === 'test' || notification.status === 'sent') ? true : item.clientNotified,
             lastNotificationType: event,
             lastNotificationAt: today,
-            notificationHistory: [notification, ...(item.notificationHistory ?? [])],
+            notificationHistory: [...createdNotifications, ...(item.notificationHistory ?? [])],
           }
     )));
-    logAction(manual ? 'Повтор уведомлення' : 'Автоуведомлення клієнту', order.id, `${channel}: ${event}. ${notification.message}`);
-    setNotice(`${channel}: клієнту ${order.client} відправлено повідомлення "${event}".`);
+    logAction(manual ? 'Повторний тест сповіщення' : 'Автоматичне тест-сповіщення', order.id, `${createdNotifications.map((item) => `${item.channel}:${item.templateKey}:${item.status}`).join(', ')}.`);
+    setNotice(`Створено ${createdNotifications.length} тестових сповіщень для ${order.client}.`);
   }
 
   function createNotificationDraft(order: ServiceOrder, event: NotificationEvent, channel: NotificationChannel, text: string, status: NotificationStatus) {
     const notification: ClientNotification = {
       id: uid('MSG'),
       orderId: order.id,
+      clientId: notificationClientId(order),
       client: order.client,
       phone: order.phone,
       channel,
       event,
+      templateKey: notificationTemplateKeyForEvent(event),
       message: text,
       status,
       createdAt: today,
       createdBy: activeUser.name,
       templateName: notificationDisplay(event),
-      sentAt: status === 'Відправлено' ? today : undefined,
+      sentAt: status === 'sent' || status === 'test' ? today : undefined,
     };
     setClientNotifications((current) => [notification, ...current]);
     setOrders((current) => current.map((item) => (
@@ -7071,7 +7126,7 @@ useEffect(() => {
         ? item
         : {
             ...item,
-            clientNotified: status === 'Відправлено' ? true : item.clientNotified,
+            clientNotified: status === 'sent' || status === 'test' ? true : item.clientNotified,
             lastNotificationType: event,
             lastNotificationAt: today,
             notificationHistory: [notification, ...(item.notificationHistory ?? [])],
@@ -7156,7 +7211,7 @@ useEffect(() => {
           }
     )));
     updateOrderStatus(order.id, 'Очікує погодження', extra ? 'Менеджер відправив погодження додаткових робіт клієнту.' : 'Менеджер відправив клієнту сторінку погодження ремонту.');
-    createNotificationDraft(order, messageEvent, channel, messageText, 'Відправлено');
+    createNotificationDraft(order, messageEvent, channel, messageText, 'test');
     logAction('Відправка погодження', order.id, `${channel}: ${messageText}`);
     setNotice(`Погодження ${order.id} підготовлено. Менеджер може одразу скопіювати або відправити клієнту готовий текст.`);
   }
@@ -10503,6 +10558,7 @@ useEffect(() => {
             upsertClient={upsertClientRecord}
             openQuickOrderForClient={openQuickOrderForClient}
             messageClientRecord={messageClientRecord}
+            notifications={clientNotifications}
           />
         )}
         {canViewPage(page) && page === 'finance' && (
@@ -14746,8 +14802,8 @@ function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations,
   const releaseBlockReason = getBlockReason(selectedOrder, actDocumentStatus);
   const canIssueOrder = canRelease(selectedOrder, actDocumentStatus) && roleCanSetOrderStatus(activeUser.role, 'Видано') && hasIssueAct && Boolean(selectedOrder.locationCode) && selectedOrder.locationStatus !== 'У інженера';
   const canTransferBas = isReadyForClient && hasIssueAct && hasDocument('Рахунок на оплату') && totals.paid > 0 && (selectedOrder.parts.length === 0 || hasDocument('Видаткова накладна'));
-  const clientNotified = notifications.some((item) => item.status === 'Відправлено');
-  const selectedNotificationStatus = notifications.find((item) => item.event === selectedNotificationEvent && item.status === 'Відправлено');
+  const clientNotified = notifications.some((item) => item.status === 'sent' || item.status === 'test');
+  const selectedNotificationStatus = notifications.find((item) => item.event === selectedNotificationEvent && (item.status === 'sent' || item.status === 'test'));
   const lastOrderNotification = notifications[0] ?? selectedOrder.notificationHistory?.[0];
   const canPreviewOrderDocuments = isManagerRole || isSupervisorRole || isAdminRole;
   const canPreviewInvoice = canPreviewOrderDocuments && totals.total > 0;
@@ -14894,7 +14950,7 @@ function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations,
     setSelectedNotificationEvent(event);
     const templateChannel = notificationTemplateForEvent(event)?.channel ?? 'SMS';
     const text = renderNotificationText(selectedOrder, event);
-    createNotificationDraft(selectedOrder, event, templateChannel, text, 'Створено');
+    createNotificationDraft(selectedOrder, event, templateChannel, text, 'pending');
     setNotificationPreview({ event, text, channel: templateChannel });
   };
   const openExtraApprovalPreview = () => {
@@ -14903,14 +14959,14 @@ function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations,
       return;
     }
     const text = renderNotificationText(selectedOrder, 'Потрібне погодження додаткових робіт', 3, { extraWorkDescription, extraWorkAmount, comment: extraWorkComment });
-    createNotificationDraft(selectedOrder, 'Потрібне погодження додаткових робіт', 'Telegram', text, 'Створено');
+    createNotificationDraft(selectedOrder, 'Потрібне погодження додаткових робіт', 'Telegram', text, 'pending');
     setNotificationPreview({ event: 'Потрібне погодження додаткових робіт', text, channel: 'Telegram' });
   };
   const copyNotificationPreview = async () => {
     if (!notificationPreview) return;
     if (navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(notificationPreview.text);
-      createNotificationDraft(selectedOrder, notificationPreview.event, notificationPreview.channel, notificationPreview.text, 'Скопійовано');
+      createNotificationDraft(selectedOrder, notificationPreview.event, notificationPreview.channel, notificationPreview.text, 'pending');
       return;
     }
     window.prompt('Скопируйте текст уведомления', notificationPreview.text);
@@ -15485,7 +15541,7 @@ function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations,
               </div>
               <div className="task-list">
                 {notifications.slice(0, 3).map((message) => (
-                  <Task key={message.id} icon={<Bell />} title={`${notificationDisplay(message.event)} · ${message.channel}`} text={`${message.createdAt} · ${message.status}`} />
+                  <Task key={message.id} icon={<Bell />} title={`${notificationDisplay(message.event)} · ${message.channel}`} text={`${message.createdAt} · ${notificationStatusLabel(message.status)}`} />
                 ))}
                 {notifications.length === 0 && <div className="empty-state">Історія сповіщень з’явиться тут після відправки клієнту.</div>}
               </div>
@@ -15859,7 +15915,7 @@ function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations,
         )}
         <div className="task-list">
           {notifications.slice(0, 4).map((message) => (
-            <Task key={message.id} icon={<Bell />} title={`${notificationDisplay(message.event)} · ${message.channel} · ${message.status}`} text={`${message.createdAt} · ${message.createdBy ?? 'система'}. ${message.message}${message.error ? ` Помилка: ${message.error}` : ''}`} />
+            <Task key={message.id} icon={<Bell />} title={`${notificationDisplay(message.event)} · ${message.channel} · ${notificationStatusLabel(message.status)}`} text={`${message.createdAt} · ${message.createdBy ?? 'система'}. ${message.message}${message.error ? ` Помилка: ${message.error}` : ''}`} />
           ))}
           {notifications.length === 0 && <div className="empty-state">Выберите шаблон и отправьте уведомление. CRM зафиксирует это в журнале и отметит заказ как уведомлённый.</div>}
         </div>
@@ -17795,6 +17851,7 @@ function ClientsPage({
   upsertClient,
   openQuickOrderForClient,
   messageClientRecord,
+  notifications,
 }: {
   clients: ClientRecord[];
   orders: ServiceOrder[];
@@ -17806,9 +17863,10 @@ function ClientsPage({
   initialSearch?: string;
   focusedClientPhone?: string;
   onFocusedClientPhoneChange?: (phone: string) => void;
-  upsertClient: (payload: { originalPhone?: string; name: string; phone: string; email?: string; taxId?: string; legalType?: 'company' | 'fop' | 'person'; address?: string; comment?: string }) => boolean;
+  upsertClient: (payload: { originalPhone?: string; name: string; phone: string; telegramId?: string; notificationChannel?: 'telegram' | 'sms' | 'both' | 'none'; email?: string; taxId?: string; legalType?: 'company' | 'fop' | 'person'; address?: string; comment?: string }) => boolean;
   openQuickOrderForClient: (client: ClientRecord) => void;
   messageClientRecord: (client: ClientRecord) => void;
+  notifications: ClientNotification[];
 }) {
   const importClientsInputRef = useRef<HTMLInputElement | null>(null);
   const [clientSearch, setClientSearch] = useState('');
@@ -17822,6 +17880,8 @@ function ClientsPage({
     originalPhone?: string;
     name: string;
     phone: string;
+    telegramId: string;
+    notificationChannel: 'telegram' | 'sms' | 'both' | 'none';
     email: string;
     taxId: string;
     legalType: 'company' | 'fop' | 'person';
@@ -17844,6 +17904,8 @@ function ClientsPage({
       originalPhone: client.phone,
       name: client.name,
       phone: client.phone,
+      telegramId: client.telegramId ?? '',
+      notificationChannel: client.notificationChannel ?? 'sms',
       email: client.email ?? '',
       taxId: client.taxId ?? '',
       legalType: client.legalType ?? inferClientLegalType(client),
@@ -17853,6 +17915,8 @@ function ClientsPage({
       mode: 'create',
       name: '',
       phone: '',
+      telegramId: '',
+      notificationChannel: 'sms',
       email: '',
       taxId: '',
       legalType: 'person',
@@ -18012,6 +18076,8 @@ function ClientsPage({
               <div className="manager-order-bottom-meta clients-card-meta">
                 <div className="manager-order-field"><strong>Контакт</strong><div>{client.name}</div></div>
                 <div className="manager-order-field"><strong>Телефон</strong><div>{client.phone}</div></div>
+                <div className="manager-order-field"><strong>Telegram ID</strong><div>{client.telegramId || 'не вказано'}</div></div>
+                <div className="manager-order-field"><strong>Канал сповіщень</strong><div>{client.notificationChannel || 'sms'}</div></div>
                 <div className="manager-order-field"><strong>Email</strong><div>{client.email?.trim() || 'немає email'}</div></div>
                 <div className="manager-order-field"><strong>Тип</strong><div>{clientTypeLabel(client.legalType)}</div></div>
                 <div className="manager-order-field"><strong>ЄДРПОУ / ІПН</strong><div>{client.taxId || 'не вказано'}</div></div>
@@ -18130,6 +18196,8 @@ function ClientsPage({
             <div className="manager-order-payment-grid">
               <label>Імʼя / компанія<input value={clientEditor.name} onChange={(event) => setClientEditor((current) => current ? { ...current, name: event.target.value } : current)} /></label>
               <label>Телефон<input value={clientEditor.phone} onChange={(event) => setClientEditor((current) => current ? { ...current, phone: event.target.value } : current)} /></label>
+              <label>Telegram ID<input value={clientEditor.telegramId} onChange={(event) => setClientEditor((current) => current ? { ...current, telegramId: event.target.value } : current)} /></label>
+              <label>Канал сповіщень<select value={clientEditor.notificationChannel} onChange={(event) => setClientEditor((current) => current ? { ...current, notificationChannel: event.target.value as 'telegram' | 'sms' | 'both' | 'none' } : current)}><option value="sms">sms</option><option value="telegram">telegram</option><option value="both">both</option><option value="none">none</option></select></label>
               <label>Email<input value={clientEditor.email} onChange={(event) => setClientEditor((current) => current ? { ...current, email: event.target.value } : current)} /></label>
               <label>ЄДРПОУ / ІПН<input value={clientEditor.taxId} onChange={(event) => setClientEditor((current) => current ? { ...current, taxId: event.target.value } : current)} /></label>
               <label>Тип клієнта<select value={clientEditor.legalType} onChange={(event) => setClientEditor((current) => current ? { ...current, legalType: event.target.value as 'company' | 'fop' | 'person' } : current)}><option value="person">Фізособа</option><option value="fop">ФОП</option><option value="company">Компанія</option></select></label>
@@ -18146,6 +18214,8 @@ function ClientsPage({
                     originalPhone: clientEditor.originalPhone,
                     name: clientEditor.name,
                     phone: clientEditor.phone,
+                    telegramId: clientEditor.telegramId,
+                    notificationChannel: clientEditor.notificationChannel,
                     email: clientEditor.email,
                     taxId: clientEditor.taxId,
                     legalType: clientEditor.legalType,
@@ -18167,6 +18237,10 @@ function ClientsPage({
       {messageClient && (
         <div className="manager-order-modal-backdrop" onClick={() => setMessageClient(null)}>
           <section className="panel manager-order-focus manager-order-modal clients-modal" onClick={(event) => event.stopPropagation()}>
+            {(() => {
+              const clientHistory = notifications.filter((item) => item.clientId === (extractDigits(messageClient.phone) || normalizeLooseText(messageClient.name)));
+              return (
+                <>
             <div className="panel-heading">
               <h2>Повідомлення клієнту</h2>
               <button type="button" onClick={() => setMessageClient(null)}>Закрити</button>
@@ -18174,10 +18248,27 @@ function ClientsPage({
             <div className="details-grid">
               <Info label="Клієнт" value={messageClient.name} />
               <Info label="Телефон" value={messageClient.phone} />
+              <Info label="Telegram ID" value={messageClient.telegramId || 'не вказано'} />
+              <Info label="Канал" value={messageClient.notificationChannel || 'sms'} />
               <Info label="Email" value={messageClient.email?.trim() || 'немає email'} />
               <Info label="Тип" value={clientTypeLabel(messageClient.legalType)} />
             </div>
-            <div className="empty-state">Інтеграцію повідомлень можна підключити пізніше. Контакти клієнта вже під рукою.</div>
+            <div className="task-list">
+              {clientHistory.map((item) => (
+                  <Task
+                    key={item.id}
+                    icon={<Bell />}
+                    title={`${item.channel} · ${item.templateKey} · ${notificationStatusLabel(item.status)}`}
+                    text={`${item.createdAt} · ${item.message}${item.error ? ` · ${item.error}` : ''}`}
+                  />
+                ))}
+              {clientHistory.length === 0 && (
+                <div className="empty-state">Історія повідомлень клієнта ще порожня.</div>
+              )}
+            </div>
+                </>
+              );
+            })()}
           </section>
         </div>
       )}
