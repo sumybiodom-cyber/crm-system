@@ -126,6 +126,7 @@ type ClientRecord = {
   taxId?: string;
   legalType?: 'company' | 'fop' | 'person';
   address?: string;
+  bankDetails?: string;
   comment?: string;
   orders: number;
 };
@@ -711,7 +712,7 @@ type PrintDocument = {
   createdAt: string;
   createdBy: string;
   version: number;
-  status: 'Чернетка' | 'Створено' | 'Роздруковано' | 'Підписано' | 'Скасовано' | 'Готово' | 'Очікує оплати' | 'Оплачено' | 'Готово до видачі' | 'PDF збережено';
+  status: 'Чернетка' | 'Створено' | 'Роздруковано' | 'Відправлено' | 'Підписано' | 'Не підписано' | 'Скасовано' | 'Готово' | 'Очікує оплати' | 'Оплачено' | 'Готово до видачі' | 'PDF збережено';
   pdfPath: string;
   amountNet?: number;
   amountVat?: number;
@@ -2176,6 +2177,7 @@ function loadClientsFromStorage(): ClientRecord[] {
             ? client.legalType
             : inferClientLegalType(client),
           address: client.address ? String(client.address).trim() : undefined,
+          bankDetails: client.bankDetails ? String(client.bankDetails).trim() : undefined,
           comment: client.comment ? String(client.comment).trim() : undefined,
           orders: Number(client.orders) || 0,
         } satisfies ClientRecord)), initialClients)
@@ -2193,6 +2195,7 @@ function saveClientsToStorage(clients: ClientRecord[]) {
     taxId: normalizeTaxId(client.taxId),
     legalType: client.legalType ?? inferClientLegalType(client),
     address: client.address?.trim() || undefined,
+    bankDetails: client.bankDetails?.trim() || undefined,
     comment: client.comment?.trim() || undefined,
   }))));
 }
@@ -5254,6 +5257,7 @@ useEffect(() => {
     taxId?: string;
     legalType?: 'company' | 'fop' | 'person';
     address?: string;
+    bankDetails?: string;
     comment?: string;
   }) {
     const normalizedPhone = normalizeImportedPhone(payload.phone);
@@ -5268,6 +5272,7 @@ useEffect(() => {
       taxId: normalizedTaxId,
       legalType: payload.legalType ?? inferClientLegalType(payload),
       address: payload.address?.trim() || undefined,
+      bankDetails: payload.bankDetails?.trim() || undefined,
       comment: payload.comment?.trim() || undefined,
       orders: 0,
     };
@@ -7709,6 +7714,55 @@ useEffect(() => {
           }
     )));
     logAction('Друк документа', order.id, `${kind}: роздруковано ${activeUser.name} о ${today}.`);
+  }
+
+  function updateDocumentStatus(documentId: string, status: PrintDocument['status']) {
+    let updatedDocument: PrintDocument | undefined;
+    setDocuments((current) => current.map((document) => {
+      if (document.id !== documentId) return document;
+      updatedDocument = {
+        ...document,
+        status,
+        signedAt: status === 'Підписано' ? (document.signedAt ?? today) : document.signedAt,
+        signedBy: status === 'Підписано' ? (document.signedBy ?? activeUser.name) : document.signedBy,
+      };
+      return updatedDocument;
+    }));
+    if (!updatedDocument) return;
+    logAction('Зміна статусу документа', updatedDocument.entityId, `${updatedDocument.kind} ${updatedDocument.number}: ${status}.`);
+    setNotice(`Статус документа ${updatedDocument.number} оновлено: ${status}.`);
+  }
+
+  function sendDocumentReminder(orderId: string, reason: 'unsigned_act' | 'invoice_unpaid' | 'debt') {
+    const order = orders.find((item) => item.id === orderId);
+    if (!order) {
+      setNotice('Замовлення для нагадування не знайдено.');
+      return;
+    }
+    const reminderText = reason === 'unsigned_act'
+      ? `Нагадування: по замовленню ${order.id} акт ще не підписано. Просимо погодити документи.`
+      : reason === 'invoice_unpaid'
+        ? `Нагадування: рахунок по замовленню ${order.id} ще не оплачено. До сплати ${money(orderDebtAmount(order))}.`
+        : `Нагадування: по замовленню ${order.id} залишок до сплати ${money(orderDebtAmount(order))}.`;
+    enqueueClientNotification(order, reason === 'unsigned_act' ? 'Нагадування' : 'Очікує оплату', undefined, true, reminderText);
+    setInternalMessages((current) => [
+      {
+        id: uid('MSG-IN'),
+        toUser: order.manager,
+        toRole: 'Менеджер',
+        orderId,
+        text: reason === 'unsigned_act'
+          ? `Клієнту відправлено нагадування: акт по ${order.id} не підписано.`
+          : `Клієнту відправлено нагадування по оплаті ${order.id}.`,
+        dueAt: today,
+        importance: 'Важлива',
+        status: 'Нове',
+        createdBy: activeUser.name,
+        createdAt: today,
+      },
+      ...current,
+    ]);
+    setNotice(`Нагадування по ${order.id} створено для клієнта і менеджера.`);
   }
 
   function latestTaxInvoiceForOrder(orderId: string) {
@@ -10890,7 +10944,18 @@ useEffect(() => {
         )}
         {canViewPage(page) && page === 'cash' && <CashPage simplePayments={simplePayments} cashShift={cashShift} activeUser={viewUser} confirmBankPayment={confirmBankPayment} openCashShift={openCashShift} closeCashShift={closeCashShift} cancelPayment={cancelPayment} refundPayment={refundPayment} />}
         {canViewPage(page) && page === 'returns' && <ReturnsPage sales={sales} orders={orders} products={products} productName={productName} />}
-        {canViewPage(page) && page === 'documents' && <DocumentsPage documents={documents} templates={documentTemplates} />}
+        {canViewPage(page) && page === 'documents' && (
+          <DocumentsPage
+            documents={documents}
+            templates={documentTemplates}
+            orders={orders}
+            notifications={clientNotifications}
+            taxInvoices={taxInvoices}
+            printDocument={printDocument}
+            updateDocumentStatus={updateDocumentStatus}
+            sendDocumentReminder={sendDocumentReminder}
+          />
+        )}
         {canViewPage(page) && page === 'tax-invoices' && <TaxInvoicesPage invoices={taxInvoices} orders={orders} createTaxInvoiceForOrder={createTaxInvoiceForOrder} registerTaxInvoice={registerTaxInvoice} />}
         {canViewPage(page) && page === 'bas-exchange' && <BasExchangePage items={basExchangeItems} mappings={basMappings} actionLogs={actionLogs} />}
         {canViewPage(page) && page === 'problem-clients' && <ProblemClientsPage orders={orders} documents={documents} setPage={setPage} setSelectedOrderId={setSelectedOrderId} />}
@@ -18081,20 +18146,112 @@ function ReturnsPage({ sales, orders, products, productName }: { sales: Sale[]; 
   );
 }
 
-function DocumentsPage({ documents, templates }: { documents: PrintDocument[]; templates: Array<{ kind: DocumentKind; description: string; lockedRule: string }> }) {
+function DocumentsPage({
+  documents,
+  templates,
+  orders,
+  notifications,
+  taxInvoices,
+  printDocument,
+  updateDocumentStatus,
+  sendDocumentReminder,
+}: {
+  documents: PrintDocument[];
+  templates: Array<{ kind: DocumentKind; description: string; lockedRule: string }>;
+  orders: ServiceOrder[];
+  notifications: ClientNotification[];
+  taxInvoices: TaxInvoice[];
+  printDocument: (kind: DocumentKind, entityType: PrintDocument['entityType'], entityId: string, clientOrSupplier: string) => void;
+  updateDocumentStatus: (documentId: string, status: PrintDocument['status']) => void;
+  sendDocumentReminder: (orderId: string, reason: 'unsigned_act' | 'invoice_unpaid' | 'debt') => void;
+}) {
   const sampleOrder = initialOrders[1] ?? initialOrders[0];
   const sampleTotals = orderTotals(sampleOrder);
   const sampleVat = documentVatTotals(sampleTotals.total);
   const sampleClient = clientDetails(sampleOrder.client, sampleOrder.phone);
   const sampleProductName = (productId: string) => initialProducts.find((product) => product.id === productId)?.name ?? productId;
+  const documentStats = {
+    drafts: documents.filter((document) => document.status === 'Чернетка').length,
+    created: documents.filter((document) => document.status === 'Створено' || document.status === 'Роздруковано' || document.status === 'PDF збережено').length,
+    sent: documents.filter((document) => document.status === 'Відправлено').length,
+    signed: documents.filter((document) => document.status === 'Підписано').length,
+    unsigned: documents.filter((document) => document.kind === 'Акт надання послуг' && document.status !== 'Підписано').length,
+  };
+  const documentAlerts = documents
+    .filter((document) => document.entityType === 'service_order')
+    .flatMap((document) => {
+      const order = orders.find((item) => item.id === document.entityId);
+      if (!order) return [];
+      const debt = orderDebtAmount(order);
+      const orderNotifications = notifications.filter((item) => item.orderId === order.id);
+      const rows: Array<{ id: string; orderId: string; title: string; detail: string; action: 'unsigned_act' | 'invoice_unpaid' | 'debt' }> = [];
+      if (document.kind === 'Акт надання послуг' && document.status !== 'Підписано') {
+        rows.push({
+          id: `${document.id}-unsigned`,
+          orderId: order.id,
+          title: 'Акт не підписано',
+          detail: `${document.number} · ${order.client} · створено ${document.createdAt}`,
+          action: 'unsigned_act',
+        });
+      }
+      if (document.kind === 'Рахунок на оплату' && debt > 0) {
+        rows.push({
+          id: `${document.id}-invoice`,
+          orderId: order.id,
+          title: 'Рахунок не оплачено',
+          detail: `${document.number} · борг ${money(debt)} · сповіщень ${orderNotifications.length}`,
+          action: 'invoice_unpaid',
+        });
+      }
+      if (debt > 0) {
+        rows.push({
+          id: `${document.id}-debt`,
+          orderId: order.id,
+          title: 'Є заборгованість',
+          detail: `${order.id} · ${order.client} · борг ${money(debt)}`,
+          action: 'debt',
+        });
+      }
+      return rows;
+    })
+    .slice(0, 12);
+  const documentsByOrder = orders
+    .map((order) => {
+      const orderDocuments = documents.filter((document) => document.entityType === 'service_order' && document.entityId === order.id);
+      const taxInvoice = taxInvoices.find((invoice) => invoice.orderId === order.id);
+      return { order, orderDocuments, taxInvoice };
+    })
+    .filter((row) => row.orderDocuments.length > 0)
+    .sort((a, b) => b.orderDocuments.length - a.orderDocuments.length || (parseDateTime(b.order.intakeDate)?.getTime() ?? 0) - (parseDateTime(a.order.intakeDate)?.getTime() ?? 0));
   return (
     <div className="page-grid">
       <PageTitle eyebrow="Документи" title="PDF, друк і юридичний архів" text="Квитанції, акти, чеки, накладні та повернення створюються з карток замовлень, продажів і закупівель. Кожен документ має версію, автора, PDF-шлях і звʼязок з документом-джерелом." />
       <section className="stats-grid">
         <Metric icon={<ClipboardList />} label="Документів" value={String(documents.length)} hint="збережені PDF" />
         <Metric icon={<ShieldCheck />} label="Шаблонів" value={String(templates.length)} hint="для ремонту, продажу, складу" />
-        <Metric icon={<History />} label="Версійність" value="Увімкнено" hint="підписані документи блокуються" />
-        <Metric icon={<CheckCircle2 />} label="Автозвʼязок" value="Є" hint="замовлення, продаж, закупка" />
+        <Metric icon={<History />} label="Підписано" value={String(documentStats.signed)} hint="історія фіксується" />
+        <Metric icon={<CheckCircle2 />} label="Не підписано" value={String(documentStats.unsigned)} hint="потребують дії" />
+      </section>
+      <section className="stats-grid">
+        <Metric icon={<ClipboardList />} label="Чернетки" value={String(documentStats.drafts)} hint="можна редагувати" />
+        <Metric icon={<Archive />} label="Створено" value={String(documentStats.created)} hint="готові до друку / PDF" />
+        <Metric icon={<Bell />} label="Відправлено" value={String(documentStats.sent)} hint="пішли клієнту" />
+        <Metric icon={<PackageCheck />} label="ПН" value={String(taxInvoices.length)} hint="архітектура під НДС" />
+      </section>
+      <section className="panel">
+        <div className="panel-heading"><h2>Контроль документообігу</h2><span>{documentAlerts.length} сигналів</span></div>
+        <div className="table documents-table">
+          <div className="table-row table-head"><span>Сигнал</span><span>Замовлення</span><span>Деталі</span><span>Дія</span></div>
+          {documentAlerts.map((row) => (
+            <div className="table-row" key={row.id}>
+              <span>{row.title}</span>
+              <span>{row.orderId}</span>
+              <span>{row.detail}</span>
+              <span><button type="button" onClick={() => sendDocumentReminder(row.orderId, row.action)}>Нагадати</button></span>
+            </div>
+          ))}
+          {documentAlerts.length === 0 && <div className="empty-state">Критичних сигналів по документах немає.</div>}
+        </div>
       </section>
       <section className="content-split">
         <div className="panel document-preview">
@@ -18185,26 +18342,46 @@ function DocumentsPage({ documents, templates }: { documents: PrintDocument[]; t
       <section className="panel">
         <div className="panel-heading"><h2>Реєстр документів</h2><span>{documents.length} записів</span></div>
         <div className="table documents-table">
-          <div className="table-row table-head"><span>Номер</span><span>Тип</span><span>Джерело</span><span>Клієнт / постачальник</span><span>Статус</span><span>PDF / BAS</span></div>
+          <div className="table-row table-head"><span>Номер</span><span>Тип</span><span>Джерело</span><span>Клієнт / постачальник</span><span>Статус</span><span>PDF / дії</span></div>
           {documents.map((document) => (
             <div className="table-row" key={document.id}>
               <span>{document.number}<small>версія {document.version} · {document.createdAt}</small></span>
               <span>{document.kind}</span>
               <span>{document.entityId}<small>{document.entityType}</small></span>
               <span>{document.clientOrSupplier}<small>{document.createdBy}</small></span>
-              <span>{document.status}</span>
+              <span>
+                {document.status}
+                <small>{document.signedBy ? `підписав ${document.signedBy}` : document.printedBy ? `друк ${document.printedBy}` : 'без підпису'}</small>
+              </span>
               <span>
                 {document.pdfPath}
                 <small>{document.amountGross ? `без ПДВ ${money(document.amountNet ?? 0)} · ПДВ ${money(document.amountVat ?? 0)} · з ПДВ ${money(document.amountGross)}` : 'суми не задані'}</small>
+                <button type="button" onClick={() => printDocument(document.kind, document.entityType, document.entityId, document.clientOrSupplier)}>Друк / PDF</button>
                 <button type="button">Передати в BAS</button>
-                {document.status === 'Чернетка' || document.status === 'Готово' || document.status === 'Очікує оплати' || document.status === 'Готово до видачі' ? <button type="button">Редагувати чернетку</button> : null}
-                {document.status !== 'Підписано' ? <button type="button">Пересоздати</button> : null}
-                {document.status === 'Чернетка' ? <button type="button">Видалити чернетку</button> : null}
+                {document.status !== 'Відправлено' && document.status !== 'Підписано' ? <button type="button" onClick={() => updateDocumentStatus(document.id, 'Відправлено')}>Позначити відправленим</button> : null}
+                {document.status !== 'Підписано' ? <button type="button" onClick={() => updateDocumentStatus(document.id, 'Підписано')}>Позначити підписаним</button> : null}
+                {document.kind === 'Акт надання послуг' && document.status !== 'Не підписано' && document.status !== 'Підписано' ? <button type="button" onClick={() => updateDocumentStatus(document.id, 'Не підписано')}>Не підписано</button> : null}
               </span>
             </div>
           ))}
         </div>
         {documents.length === 0 && <div className="empty-state">Документи ще не створені. Реєстр не створює їх вручну: відкрийте замовлення, продаж або закупку і натисніть потрібну кнопку процесу.</div>}
+      </section>
+      <section className="panel">
+        <div className="panel-heading"><h2>Історія документів по замовленнях</h2><span>{documentsByOrder.length} замовлень</span></div>
+        <div className="table documents-table">
+          <div className="table-row table-head"><span>Замовлення</span><span>Клієнт</span><span>Документи</span><span>ПН / борг</span><span>PDF / статуси</span></div>
+          {documentsByOrder.slice(0, 12).map(({ order, orderDocuments, taxInvoice }) => (
+            <div className="table-row" key={order.id}>
+              <span>{order.id}<small>{order.device}</small></span>
+              <span>{order.client}<small>{order.phone}</small></span>
+              <span>{orderDocuments.map((document) => document.kind).join(', ')}</span>
+              <span>{taxInvoice ? `${taxInvoice.number} · ${taxInvoice.status}` : `Борг ${money(orderDebtAmount(order))}`}</span>
+              <span>{orderDocuments.map((document) => `${document.number} · ${document.status}`).join(' | ')}</span>
+            </div>
+          ))}
+          {documentsByOrder.length === 0 && <div className="empty-state">Історія документів зʼявиться після формування з карток замовлень.</div>}
+        </div>
       </section>
       <section className="panel">
         <div className="panel-heading"><h2>Шаблони друкованих форм</h2><span>логотип, реквізити, підписи, печатка</span></div>
