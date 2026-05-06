@@ -983,6 +983,20 @@ type EngineerPayment = {
   comment?: string;
 };
 
+type FinanceExpense = {
+  id: string;
+  category: 'Закупки' | 'Зарплата' | 'Повернення' | 'Оренда' | 'Сервісні витрати' | 'Інше';
+  amount: number;
+  method: PaymentMethod;
+  createdAt: string;
+  comment?: string;
+  userId?: string;
+  orderId?: string;
+  purchaseId?: string;
+  supplierId?: string;
+  source: 'manual' | 'purchase' | 'payroll' | 'refund';
+};
+
 type SupplierRecord = {
   id: string;
   name: string;
@@ -1016,6 +1030,7 @@ type BackupPayload = {
   actionLogs: ActionLog[];
   cashShift: CashShift;
   engineerPayments?: EngineerPayment[];
+  financeExpenses?: FinanceExpense[];
 };
 
 type BackupSnapshot = {
@@ -2092,6 +2107,7 @@ const PRODUCTS_STORAGE_KEY = 'crm_products';
 const ORDERS_STORAGE_KEY = 'crm_orders';
 const PAYMENTS_STORAGE_KEY = 'crm_payments';
 const ENGINEER_PAYMENTS_STORAGE_KEY = 'crm_engineer_payments';
+const FINANCE_EXPENSES_STORAGE_KEY = 'crm_finance_expenses';
 const TAX_INVOICES_STORAGE_KEY = 'crm_tax_invoices';
 const CONTRACTS_STORAGE_KEY = 'crm_contracts';
 const CONTRACT_ACTS_STORAGE_KEY = 'crm_contract_acts';
@@ -2403,6 +2419,33 @@ function loadEngineerPaymentsFromStorage(): EngineerPayment[] {
 
 function saveEngineerPaymentsToStorage(items: EngineerPayment[]) {
   localStorage.setItem(ENGINEER_PAYMENTS_STORAGE_KEY, JSON.stringify(items));
+}
+
+function loadFinanceExpensesFromStorage(): FinanceExpense[] {
+  try {
+    const raw = localStorage.getItem(FINANCE_EXPENSES_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.map((item) => ({
+      id: String(item.id),
+      category: item.category === 'Закупки' || item.category === 'Зарплата' || item.category === 'Повернення' || item.category === 'Оренда' || item.category === 'Сервісні витрати' ? item.category : 'Інше',
+      amount: Math.max(0, Number(item.amount) || 0),
+      method: item.method === 'Картка' || item.method === 'Безготівка' || item.method === 'Змішана' ? item.method : 'Готівка',
+      createdAt: String(item.createdAt ?? today),
+      comment: typeof item.comment === 'string' ? item.comment : undefined,
+      userId: typeof item.userId === 'string' ? item.userId : undefined,
+      orderId: typeof item.orderId === 'string' ? item.orderId : undefined,
+      purchaseId: typeof item.purchaseId === 'string' ? item.purchaseId : undefined,
+      supplierId: typeof item.supplierId === 'string' ? item.supplierId : undefined,
+      source: item.source === 'purchase' || item.source === 'payroll' || item.source === 'refund' ? item.source : 'manual',
+    } satisfies FinanceExpense)) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveFinanceExpensesToStorage(items: FinanceExpense[]) {
+  localStorage.setItem(FINANCE_EXPENSES_STORAGE_KEY, JSON.stringify(items));
 }
 
 function loadContractsFromStorage() {
@@ -4827,6 +4870,7 @@ useEffect(() => {
   const [taxInvoices, setTaxInvoices] = useState<TaxInvoice[]>(() => loadTaxInvoicesFromStorage());
   const [simplePayments, setSimplePayments] = useState<SimpleOrderPaymentRecord[]>(() => loadSimplePaymentsFromStorage());
   const [engineerPayments, setEngineerPayments] = useState<EngineerPayment[]>(() => loadEngineerPaymentsFromStorage());
+  const [financeExpenses, setFinanceExpenses] = useState<FinanceExpense[]>(() => loadFinanceExpensesFromStorage());
   const [clientNotifications, setClientNotifications] = useState<ClientNotification[]>(initialClientNotifications);
   const [internalMessages, setInternalMessages] = useState<InternalMessage[]>(initialInternalMessages);
   const [notificationTemplates] = useState<ClientNotificationTemplate[]>(clientNotificationTemplates);
@@ -5103,6 +5147,9 @@ useEffect(() => {
   useEffect(() => {
     saveEngineerPaymentsToStorage(engineerPayments);
   }, [engineerPayments]);
+  useEffect(() => {
+    saveFinanceExpensesToStorage(financeExpenses);
+  }, [financeExpenses]);
 
   useEffect(() => {
     saveContractsToStorage(contracts);
@@ -5657,6 +5704,7 @@ useEffect(() => {
       orders,
       payments: simplePayments,
       engineerPayments,
+      financeExpenses,
       contracts,
       contractActs,
       bankImportItems,
@@ -5716,6 +5764,7 @@ useEffect(() => {
     saveTaxInvoicesToStorage(payload.taxInvoices ?? []);
     saveCashShiftToStorage(payload.cashShift);
     saveEngineerPaymentsToStorage(payload.engineerPayments ?? []);
+    saveFinanceExpensesToStorage(payload.financeExpenses ?? []);
     const restoredAudit = [] as ActionLog[];
     setUsers(payload.users);
     setCustomerList(payload.clients);
@@ -5733,6 +5782,7 @@ useEffect(() => {
     setTaxInvoices((payload.taxInvoices ?? []).map(normalizeStoredTaxInvoice));
     setCashShift(payload.cashShift ?? initialCashShift);
     setEngineerPayments(payload.engineerPayments ?? []);
+    setFinanceExpenses(payload.financeExpenses ?? []);
     setSelectedOrderId(payload.orders[0]?.id ?? '');
     setSelectedProductId(payload.products[0]?.id ?? '');
     setSelectedSaleProductId(payload.products[0]?.id ?? '');
@@ -10020,6 +10070,30 @@ useEffect(() => {
     return true;
   }
 
+  function addFinanceExpense(expense: { category: FinanceExpense['category']; amount: string; method: PaymentMethod; comment: string; orderId?: string; purchaseId?: string; supplierId?: string }) {
+    const amount = Number(expense.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setNotice('Вкажіть коректну суму витрати.');
+      return false;
+    }
+    const record: FinanceExpense = {
+      id: uid('FEXP'),
+      category: expense.category,
+      amount,
+      method: expense.method,
+      createdAt: today,
+      comment: expense.comment.trim() || undefined,
+      userId: activeUser.id,
+      orderId: expense.orderId,
+      purchaseId: expense.purchaseId,
+      supplierId: expense.supplierId,
+      source: 'manual',
+    };
+    setFinanceExpenses((current) => [record, ...current]);
+    setNotice(`Витрату ${money(amount)} збережено.`);
+    return true;
+  }
+
   function issueSale(sale: Sale) {
     const totals = saleTotals(sale);
     if (totals.debt > 0) {
@@ -10847,11 +10921,16 @@ useEffect(() => {
             products={products}
             receipts={receipts}
             movements={movements}
+            purchases={purchases}
+            suppliers={suppliers}
             contracts={contracts}
             contractActs={contractActs}
             bankImportItems={bankImportItems}
             simplePayments={simplePayments}
+            engineerPayments={engineerPayments}
+            financeExpenses={financeExpenses}
             users={users}
+            addFinanceExpense={addFinanceExpense}
             onOpenClients={() => stayOnCurrentPage()}
           />
         )}
@@ -19057,22 +19136,32 @@ function FinancePage({
   products,
   receipts,
   movements,
+  purchases,
+  suppliers,
   contracts,
   contractActs,
   bankImportItems,
   simplePayments,
+  engineerPayments,
+  financeExpenses,
   users,
+  addFinanceExpense,
   onOpenClients,
 }: {
   orders: ServiceOrder[];
   products: Product[];
   receipts: GoodsReceipt[];
   movements: StockMovement[];
+  purchases: PurchaseOrder[];
+  suppliers: SupplierRecord[];
   contracts: ContractRecord[];
   contractActs: ContractActRecord[];
   bankImportItems: BankImportItem[];
   simplePayments: SimpleOrderPaymentRecord[];
+  engineerPayments: EngineerPayment[];
+  financeExpenses: FinanceExpense[];
   users: User[];
+  addFinanceExpense: (expense: { category: FinanceExpense['category']; amount: string; method: PaymentMethod; comment: string; orderId?: string; purchaseId?: string; supplierId?: string }) => boolean;
   onOpenClients: () => void;
 }) {
   const [period, setPeriod] = useState<'today' | 'week' | 'month' | 'custom'>('month');
@@ -19080,6 +19169,12 @@ function FinancePage({
   const [customTo, setCustomTo] = useState('');
   const [managerFilter, setManagerFilter] = useState('all');
   const [clientTypeFilter, setClientTypeFilter] = useState<'all' | 'physical' | 'legal'>('all');
+  const [expenseDraft, setExpenseDraft] = useState<{ category: FinanceExpense['category']; amount: string; method: PaymentMethod; comment: string }>({
+    category: 'Сервісні витрати',
+    amount: '',
+    method: 'Готівка',
+    comment: '',
+  });
 
   const isWithinSelectedPeriod = (dateText: string) => {
     if (period !== 'custom') return isDateInPeriod(dateText, period as AccountingPeriod);
@@ -19097,6 +19192,7 @@ function FinancePage({
   };
 
   const orderClientType = (order: ServiceOrder) => (order.legalEntity || order.contractId ? 'legal' : 'physical');
+  const supplierNameById = (supplierId?: string, fallback = 'Постачальник') => suppliers.find((supplier) => supplier.id === supplierId)?.name ?? fallback;
   const managerNameByPayment = (payment: SimpleOrderPaymentRecord) => {
     if (payment.orderId) return orders.find((order) => order.id === payment.orderId)?.manager ?? '';
     if (payment.actId) {
@@ -19185,6 +19281,103 @@ function FinancePage({
     unmatched: bankImportItems.filter((item) => item.status === 'unmatched').length,
     review: bankImportItems.filter((item) => item.status === 'review').length,
   };
+
+  const expenseRowsDerived = [
+    ...purchases
+      .filter((purchase) => (purchase.paidToSupplier ?? 0) > 0)
+      .map((purchase) => ({
+        id: `purchase-${purchase.id}`,
+        date: purchase.paidAt ?? purchase.purchaseDate ?? purchase.orderedAt,
+        type: 'Закупка',
+        amount: purchase.paidToSupplier ?? 0,
+        comment: purchase.comment || `Оплата постачальнику ${supplierNameById(purchase.supplierId, purchase.supplier)}`,
+        employee: purchase.requestedBy || '—',
+        related: purchase.id,
+        direction: 'outgoing' as const,
+      })),
+    ...engineerPayments.map((payment) => ({
+      id: `payroll-${payment.id}`,
+      date: payment.createdAt,
+      type: 'Зарплата',
+      amount: payment.amount,
+      comment: payment.comment || `Виплата інженеру ${users.find((user) => user.id === payment.engineerId)?.name ?? payment.engineerId}`,
+      employee: users.find((user) => user.id === payment.engineerId)?.name ?? payment.engineerId,
+      related: payment.engineerId,
+      direction: 'outgoing' as const,
+    })),
+    ...financeExpenses.map((expense) => ({
+      id: `manual-${expense.id}`,
+      date: expense.createdAt,
+      type: expense.category,
+      amount: expense.amount,
+      comment: expense.comment || expense.category,
+      employee: users.find((user) => user.id === expense.userId)?.name ?? expense.userId ?? '—',
+      related: expense.orderId || expense.purchaseId || '—',
+      direction: 'outgoing' as const,
+    })),
+    ...simplePayments
+      .filter((payment) => payment.direction === 'outgoing' && payment.amount > 0)
+      .map((payment) => ({
+        id: `refund-${payment.id}`,
+        date: payment.createdAt ?? payment.date,
+        type: 'Повернення',
+        amount: payment.amount,
+        comment: payment.refundReason || `Повернення по ${payment.orderNumber || payment.entityId}`,
+        employee: payment.acceptedBy || payment.userId || '—',
+        related: payment.orderNumber || payment.entityId,
+        direction: 'outgoing' as const,
+      })),
+  ].filter((row) => isWithinSelectedPeriod(row.date));
+
+  const financialMovements = [
+    ...visiblePayments.map((payment) => ({
+      id: `income-${payment.id}`,
+      date: payment.createdAt ?? payment.date,
+      type: payment.entityType === 'sale' ? 'Продаж' : 'Оплата клієнта',
+      amount: payment.amount,
+      comment: `${payment.client} · ${payment.orderNumber || payment.entityId}`,
+      employee: payment.acceptedBy || payment.userId || '—',
+      related: payment.orderNumber || payment.entityId,
+      direction: 'incoming' as const,
+    })),
+    ...expenseRowsDerived,
+  ]
+    .sort((a, b) => (parseDateTime(b.date)?.getTime() ?? 0) - (parseDateTime(a.date)?.getTime() ?? 0));
+
+  const totalOutgoing = expenseRowsDerived.reduce((sum, row) => sum + row.amount, 0);
+  const movementBalance = paymentMetrics.amount - totalOutgoing;
+  const supplierDebtTotal = purchases.reduce((sum, purchase) => sum + (purchase.supplierDebt ?? 0), 0);
+  const revenueToday = simplePayments
+    .filter((payment) => payment.status === 'подтвержден' && payment.direction !== 'outgoing' && isDateInPeriod(payment.createdAt ?? payment.date, 'today'))
+    .reduce((sum, payment) => sum + payment.amount, 0);
+  const revenueMonth = simplePayments
+    .filter((payment) => payment.status === 'подтвержден' && payment.direction !== 'outgoing' && isDateInPeriod(payment.createdAt ?? payment.date, 'month'))
+    .reduce((sum, payment) => sum + payment.amount, 0);
+  const averageCheck = paymentMetrics.count > 0 ? paymentMetrics.amount / paymentMetrics.count : 0;
+  const topClients = Array.from(
+    visiblePayments.reduce((map, payment) => {
+      map.set(payment.client, (map.get(payment.client) ?? 0) + payment.amount);
+      return map;
+    }, new Map<string, number>()),
+  )
+    .map(([client, amount]) => ({ client, amount }))
+    .sort((a, b) => b.amount - a.amount)
+    .slice(0, 5);
+  const detailedDebtRows = filteredOrders
+    .map((order) => {
+      const debt = orderDebtSnapshot(order).remainingDebt;
+      const debtDate = order.debtSince ?? order.issuedDebtAt ?? order.intakeDate;
+      const debtDays = daysSince(debtDate);
+      return {
+        order,
+        debt,
+        debtDate,
+        debtDays,
+        debtStatus: debtDays > 30 ? 'Прострочен' : 'Новий',
+      };
+    })
+    .filter((row) => row.debt > 0)
+    .sort((a, b) => b.debtDays - a.debtDays || b.debt - a.debt);
 
   const averageProfit = totalOrdersCount > 0 ? totalProfit / totalOrdersCount : 0;
   const topProfitOrders = orderProfitRows
@@ -19278,19 +19471,90 @@ function FinancePage({
       </section>
 
       <section className="executive-kpis finance-center-kpis">
+        <article className="executive-kpi-card"><span>Виручка за день</span><strong>{money(revenueToday)}</strong></article>
+        <article className="executive-kpi-card"><span>Виручка за місяць</span><strong>{money(revenueMonth)}</strong></article>
+        <article className="executive-kpi-card"><span>Прибуток</span><strong>{money(totalProfit)}</strong></article>
+        <article className="executive-kpi-card"><span>Витрати</span><strong>{money(totalOutgoing)}</strong></article>
+        <article className="executive-kpi-card"><span>Борги клієнтів</span><strong>{money(totalDebt)}</strong></article>
+        <article className="executive-kpi-card"><span>Борги постачальникам</span><strong>{money(supplierDebtTotal)}</strong></article>
+        <article className="executive-kpi-card"><span>Середній чек</span><strong>{money(averageCheck)}</strong></article>
         <article className="executive-kpi-card"><span>Всього замовлень</span><strong>{String(totalOrdersCount)}</strong></article>
-        <article className="executive-kpi-card"><span>Загальна сума замовлень</span><strong>{money(totalOrdersAmount)}</strong></article>
-        <article className="executive-kpi-card"><span>Загальна виручка</span><strong>{money(totalPaid)}</strong></article>
-        <article className="executive-kpi-card"><span>Загальні витрати</span><strong>{money(totalExpenses)}</strong></article>
-        <article className="executive-kpi-card"><span>Загальна прибуток</span><strong>{money(totalProfit)}</strong></article>
-        <article className="executive-kpi-card"><span>В боргу</span><strong>{money(totalDebt)}</strong></article>
-        <article className="executive-kpi-card"><span>В актах, не оплачено</span><strong>{money(unpaidActsAmount)}</strong></article>
-        <article className="executive-kpi-card"><span>В договорах, не закрито</span><strong>{money(openContractAmount)}</strong></article>
       </section>
 
       <section className="manager-orders-signals">
         {redSignals.map((signal) => <span key={signal} className="manager-order-hint manager-order-hint-danger">{signal}</span>)}
         {yellowSignals.map((signal) => <span key={signal} className="manager-order-hint manager-order-hint-warning">{signal}</span>)}
+      </section>
+
+      <section className="executive-grid finance-center-top-grid">
+        <section className="panel executive-panel">
+          <div className="panel-heading">
+            <h2>Борги клієнтів</h2>
+            <span>{detailedDebtRows.length} замовлень</span>
+          </div>
+          <div className="table payments-table">
+            <div className="table-row table-head"><span>Клієнт</span><span>Замовлення</span><span>Борг</span><span>Дата</span><span>Днів</span><span>Статус</span></div>
+            {detailedDebtRows.slice(0, 10).map((row) => (
+              <div key={row.order.id} className="table-row">
+                <span>{row.order.client}</span>
+                <span>{row.order.id}</span>
+                <span>{money(row.debt)}</span>
+                <span>{row.debtDate}</span>
+                <span>{row.debtDays}</span>
+                <span><span className={row.debt <= 0 ? 'tag tag-teal' : row.debtDays > 30 ? 'tag tag-red' : 'tag tag-yellow'}>{row.debtStatus}</span></span>
+              </div>
+            ))}
+            {detailedDebtRows.length === 0 && <div className="empty-state">Боргів клієнтів немає.</div>}
+          </div>
+        </section>
+        <section className="panel executive-panel">
+          <div className="panel-heading">
+            <h2>Витрати</h2>
+            <span>{expenseRowsDerived.length} операцій</span>
+          </div>
+          <div className="table purchase-detail-form">
+            <label>
+              Категорія
+              <select value={expenseDraft.category} onChange={(event) => setExpenseDraft((current) => ({ ...current, category: event.target.value as FinanceExpense['category'] }))}>
+                <option value="Закупки">Закупки</option>
+                <option value="Зарплата">Зарплата</option>
+                <option value="Повернення">Повернення</option>
+                <option value="Оренда">Оренда</option>
+                <option value="Сервісні витрати">Сервісні витрати</option>
+                <option value="Інше">Інше</option>
+              </select>
+            </label>
+            <label>
+              Сума
+              <input type="number" min={0} value={expenseDraft.amount} onChange={(event) => setExpenseDraft((current) => ({ ...current, amount: event.target.value }))} />
+            </label>
+            <label>
+              Спосіб
+              <select value={expenseDraft.method} onChange={(event) => setExpenseDraft((current) => ({ ...current, method: event.target.value as PaymentMethod }))}>
+                <option value="Готівка">Готівка</option>
+                <option value="Картка">Картка</option>
+                <option value="Безготівка">Безготівка</option>
+                <option value="Змішана">Змішана</option>
+              </select>
+            </label>
+            <label>
+              Коментар
+              <input value={expenseDraft.comment} onChange={(event) => setExpenseDraft((current) => ({ ...current, comment: event.target.value }))} />
+            </label>
+            <div className="action-row">
+              <button
+                type="button"
+                className="submit-button"
+                onClick={() => {
+                  const ok = addFinanceExpense(expenseDraft);
+                  if (ok) setExpenseDraft({ category: 'Сервісні витрати', amount: '', method: 'Готівка', comment: '' });
+                }}
+              >
+                Додати витрату
+              </button>
+            </div>
+          </div>
+        </section>
       </section>
 
       <section className="executive-grid finance-center-top-grid">
@@ -19357,6 +19621,54 @@ function FinancePage({
         </section>
       </section>
 
+      <section className="executive-grid finance-center-middle-grid">
+        <section className="panel executive-panel">
+          <div className="panel-heading">
+            <h2>Оплати</h2>
+            <span>{visiblePayments.length} платежів</span>
+          </div>
+          <div className="table payments-table">
+            <div className="table-row table-head"><span>Дата</span><span>Замовлення</span><span>Сума</span><span>Спосіб</span><span>Хто прийняв</span></div>
+            {visiblePayments.slice(0, 10).map((payment) => (
+              <div key={payment.id} className="table-row">
+                <span>{payment.createdAt ?? payment.date}</span>
+                <span>{payment.orderNumber || payment.entityId}</span>
+                <span>{money(payment.amount)}</span>
+                <span>{payment.method === 'наличные' ? 'Готівка' : payment.method === 'карта' ? 'Картка' : 'Безготівка'}</span>
+                <span>{payment.acceptedBy || payment.userId || '—'}</span>
+              </div>
+            ))}
+            {visiblePayments.length === 0 && <div className="empty-state">Оплат за фільтром немає.</div>}
+          </div>
+        </section>
+
+        <section className="panel executive-panel">
+          <div className="panel-heading">
+            <h2>Рух коштів</h2>
+            <span>{financialMovements.length} операцій</span>
+          </div>
+          <div className="details-grid">
+            <Info label="Прихід" value={money(paymentMetrics.amount)} />
+            <Info label="Витрата" value={money(totalOutgoing)} />
+            <Info label="Залишок" value={money(movementBalance)} />
+          </div>
+          <div className="table payments-table">
+            <div className="table-row table-head"><span>Дата</span><span>Тип</span><span>Сума</span><span>Коментар</span><span>Співробітник</span><span>Пов'язано</span></div>
+            {financialMovements.slice(0, 12).map((row) => (
+              <div key={row.id} className="table-row">
+                <span>{row.date}</span>
+                <span>{row.type}</span>
+                <span>{row.direction === 'incoming' ? `+ ${money(row.amount)}` : `- ${money(row.amount)}`}</span>
+                <span>{row.comment}</span>
+                <span>{row.employee}</span>
+                <span>{row.related}</span>
+              </div>
+            ))}
+            {financialMovements.length === 0 && <div className="empty-state">Руху коштів за фільтром немає.</div>}
+          </div>
+        </section>
+      </section>
+
       <section className="executive-grid finance-center-bottom-grid">
         <section className="panel executive-panel">
           <div className="panel-heading">
@@ -19377,6 +19689,35 @@ function FinancePage({
               </div>
             ))}
             {topProfitOrders.length === 0 && <div className="empty-state">Немає прибуткових замовлень за фільтром.</div>}
+          </div>
+        </section>
+
+        <section className="panel executive-panel">
+          <div className="panel-heading">
+            <h2>Топ клієнтів</h2>
+            <span>{topClients.length}</span>
+          </div>
+          <div className="executive-list">
+            {topClients.map((row) => (
+              <div key={row.client} className="executive-list-row">
+                <span>{row.client}</span>
+                <strong>{money(row.amount)}</strong>
+              </div>
+            ))}
+            {topClients.length === 0 && <div className="empty-state">Поки немає даних.</div>}
+          </div>
+        </section>
+
+        <section className="panel executive-panel">
+          <div className="panel-heading">
+            <h2>Каса</h2>
+            <span>живий баланс</span>
+          </div>
+          <div className="details-grid">
+            <Info label="Прихід" value={money(paymentMetrics.amount)} />
+            <Info label="Розхід" value={money(totalOutgoing)} />
+            <Info label="Залишок" value={money(movementBalance)} />
+            <Info label="Середній чек" value={money(averageCheck)} />
           </div>
         </section>
 
