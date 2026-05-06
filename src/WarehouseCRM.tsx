@@ -12,6 +12,7 @@ import {
   Bell,
   CheckCircle2,
   ClipboardList,
+  Clock3,
   History,
   LayoutDashboard,
   LogOut,
@@ -24,6 +25,7 @@ import {
   ShieldCheck,
   ShoppingCart,
   Truck,
+  TrendingUp,
   Users,
   Wallet,
   Wrench,
@@ -269,6 +271,9 @@ type OrderPart = {
   requirementId?: string;
   purchaseId?: string;
   batchAllocations?: BatchAllocation[];
+  reservedAt?: string;
+  reservedBy?: string;
+  stockCommitted?: boolean;
 };
 
 type WorkAccrualType = 'percent_of_work_amount' | 'fixed_per_unit';
@@ -507,6 +512,9 @@ type SaleItem = {
   discount: number;
   status: 'Чернетка' | 'Зарезервовано' | 'Видано' | 'Повернення' | 'Скасовано';
   batchAllocations?: BatchAllocation[];
+  reservedAt?: string;
+  reservedBy?: string;
+  stockCommitted?: boolean;
 };
 
 type SaleReturn = {
@@ -2912,6 +2920,20 @@ function uid(prefix: string) {
 
 function available(product: Product) {
   return Math.max(product.stock - product.reserved, 0);
+}
+
+function partStockCommitted(part: Pick<OrderPart, 'status' | 'stockCommitted'>) {
+  if (typeof part.stockCommitted === 'boolean') return part.stockCommitted;
+  return ['Видано інженеру', 'Встановлено', 'Списано', 'Повернення'].includes(part.status);
+}
+
+function saleItemStockCommitted(item: Pick<SaleItem, 'status' | 'stockCommitted'>) {
+  if (typeof item.stockCommitted === 'boolean') return item.stockCommitted;
+  return ['Видано', 'Повернення'].includes(item.status);
+}
+
+function allocationsTotalCost(allocations?: BatchAllocation[]) {
+  return (allocations ?? []).reduce((sum, allocation) => sum + (allocation.qty * allocation.unitCost), 0);
 }
 
 function batchTotalAvailable(product: Product) {
@@ -6319,9 +6341,9 @@ useEffect(() => {
       setNotice('Недостатньо товару на складі');
       return;
     }
-    const fifo = fifoConsumeBatches(targetProduct, requestedQty);
-    if (!fifo) {
-      setNotice(`Не вдалося списати "${targetProduct.name}" по партіях FIFO.`);
+    const reserved = allocateReserveBatches(targetProduct, requestedQty);
+    if (!reserved) {
+      setNotice(`Не вдалося зарезервувати "${targetProduct.name}" по партіях FIFO.`);
       return;
     }
     const partPrice = targetProduct.price || targetProduct.cost;
@@ -6329,14 +6351,17 @@ useEffect(() => {
       id: uid('PART'),
       productId: targetProduct.id,
       qty: requestedQty,
-      status: 'Встановлено',
-      cost: Math.round(fifo.totalCost / requestedQty),
+      status: 'Зарезервовано',
+      cost: Math.round(reserved.totalCost / requestedQty),
       price: partPrice,
-      batchAllocations: fifo.allocations,
+      batchAllocations: reserved.allocations,
+      reservedAt: today,
+      reservedBy: activeUser.name,
+      stockCommitted: false,
     };
     const updatedProducts = products.map((product) => (
       product.id === targetProduct.id
-        ? { ...product, stock: Math.max(product.stock - requestedQty, 0), installed: product.installed + requestedQty, batches: fifo.batches }
+        ? { ...product, reserved: product.reserved + requestedQty }
         : product
     ));
     const updatedOrders = orders.map((order) => (
@@ -6356,19 +6381,19 @@ useEffect(() => {
     setProducts(updatedProducts);
     setOrders(updatedOrders);
     addMovement({
-      type: 'Списання',
+      type: 'Резерв',
       productId: targetProduct.id,
       qty: requestedQty,
       orderId,
       basis: orderId,
-      batchAllocations: fifo.allocations,
-      batchRefs: fifo.allocations.map((item) => `${item.batchId} x${item.qty}`).join(', '),
-      unitPrice: requestedQty > 0 ? Math.round(fifo.totalCost / requestedQty) : 0,
-      totalAmount: fifo.totalCost,
-      comment: `Автоматичне списання в замовлення ${orderId}: ${fifo.allocations.map((item) => `${item.batchId} x${item.qty}`).join(', ')}.`,
+      batchAllocations: reserved.allocations,
+      batchRefs: reserved.allocations.map((item) => `${item.batchId} x${item.qty}`).join(', '),
+      unitPrice: requestedQty > 0 ? Math.round(reserved.totalCost / requestedQty) : 0,
+      totalAmount: reserved.totalCost,
+      comment: `Автоматичний резерв під замовлення ${orderId}: ${reserved.allocations.map((item) => `${item.batchId} x${item.qty}`).join(', ')}.`,
     });
-    logAction('Списання в замовлення', orderId, `${targetProduct.name} · ${requestedQty} шт. · FIFO ${fifo.allocations.map((item) => `${item.batchId}/${item.qty}`).join(', ')}.`);
-    setNotice(`Деталь "${targetProduct.name}" додано до ${orderId}. Склад списано автоматично.`);
+    logAction('Резерв в замовлення', orderId, `${targetProduct.name} · ${requestedQty} шт. · FIFO ${reserved.allocations.map((item) => `${item.batchId}/${item.qty}`).join(', ')}.`);
+    setNotice(`Деталь "${targetProduct.name}" додано до ${orderId}. Резерв створено автоматично.`);
   }
 
   function removeSimpleManagerOrderPart(orderId: string, partId: string, reason?: string, comment?: string) {
@@ -6382,13 +6407,15 @@ useEffect(() => {
     const reasonText = reason?.trim() || 'Повернення деталі';
     const commentText = comment?.trim();
     const detailText = [reasonText, commentText].filter(Boolean).join(' · ');
+    const committed = partStockCommitted(targetPart);
     const updatedProducts = products.map((product) => (
       product.id === targetPart.productId
         ? {
             ...product,
-            stock: product.stock + targetPart.qty,
-            installed: Math.max(product.installed - targetPart.qty, 0),
-            batches: targetPart.batchAllocations ? restoreBatchAllocations(product, targetPart.batchAllocations) : product.batches,
+            stock: committed ? product.stock + targetPart.qty : product.stock,
+            reserved: !committed ? Math.max(product.reserved - targetPart.qty, 0) : product.reserved,
+            installed: committed ? Math.max(product.installed - targetPart.qty, 0) : product.installed,
+            batches: committed && targetPart.batchAllocations ? restoreBatchAllocations(product, targetPart.batchAllocations) : product.batches,
           }
         : product
     ));
@@ -6409,7 +6436,7 @@ useEffect(() => {
     setProducts(updatedProducts);
     setOrders(updatedOrders);
     addMovement({
-      type: 'Повернення',
+      type: committed ? 'Повернення' : 'Зняття резерву',
       productId: targetPart.productId,
       qty: targetPart.qty,
       orderId,
@@ -6418,10 +6445,12 @@ useEffect(() => {
       batchRefs: targetPart.batchAllocations?.map((item) => `${item.batchId} x${item.qty}`).join(', '),
       unitPrice: targetPart.cost,
       totalAmount: targetPart.cost * targetPart.qty,
-      comment: `Автоматичне повернення з замовлення ${orderId} у складські партії.${detailText ? ` ${detailText}.` : ''}`,
+      comment: committed
+        ? `Автоматичне повернення з замовлення ${orderId} у складські партії.${detailText ? ` ${detailText}.` : ''}`
+        : `Автоматичне зняття резерву із замовлення ${orderId}.${detailText ? ` ${detailText}.` : ''}`,
     });
-    logAction('Повернення деталі на склад', orderId, `${products.find((product) => product.id === targetPart.productId)?.name ?? targetPart.productId} · ${targetPart.qty} шт.${detailText ? ` · ${detailText}` : ''}`);
-    setNotice(`Деталь повернуто на склад із ${orderId}.`);
+    logAction(committed ? 'Повернення деталі на склад' : 'Зняття резерву деталі', orderId, `${products.find((product) => product.id === targetPart.productId)?.name ?? targetPart.productId} · ${targetPart.qty} шт.${detailText ? ` · ${detailText}` : ''}`);
+    setNotice(committed ? `Деталь повернуто на склад із ${orderId}.` : `Резерв деталі знято із ${orderId}.`);
   }
 
   function acceptSimpleManagerPayment(orderId: string, repairPriceInput: string, paymentType: 'наличные' | 'карта' | 'перевод', paymentKind: SimpleLedgerPaymentKind = 'оплата', paymentReason = '') {
@@ -8339,25 +8368,129 @@ useEffect(() => {
     return true;
   }
 
+  function reservedBatchQty(productId: string, batchId: string) {
+    const serviceReserved = orders.reduce((sum, order) => sum + order.parts.reduce((inner, part) => {
+      if (part.productId !== productId || partStockCommitted(part)) return inner;
+      return inner + (part.batchAllocations ?? []).reduce((lineSum, allocation) => (
+        allocation.batchId === batchId ? lineSum + allocation.qty : lineSum
+      ), 0);
+    }, 0), 0);
+    const saleReserved = sales.reduce((sum, sale) => sum + sale.items.reduce((inner, item) => {
+      if (item.productId !== productId || saleItemStockCommitted(item)) return inner;
+      return inner + (item.batchAllocations ?? []).reduce((lineSum, allocation) => (
+        allocation.batchId === batchId ? lineSum + allocation.qty : lineSum
+      ), 0);
+    }, 0), 0);
+    return serviceReserved + saleReserved;
+  }
+
+  function allocateReserveBatches(product: Product, qty: number, pendingAllocations?: BatchAllocation[]) {
+    if (qty <= 0) return { allocations: [], totalCost: 0 };
+    let remaining = qty;
+    const allocations: BatchAllocation[] = [];
+    const stagedByBatch = (pendingAllocations ?? []).reduce((map, allocation) => {
+      map.set(allocation.batchId, (map.get(allocation.batchId) ?? 0) + allocation.qty);
+      return map;
+    }, new Map<string, number>());
+    const sortedBatches = [...product.batches].sort((a, b) => (
+      (parseDateTime(a.purchaseDate)?.getTime() ?? 0) - (parseDateTime(b.purchaseDate)?.getTime() ?? 0)
+    ));
+    for (const batch of sortedBatches) {
+      const alreadyReserved = reservedBatchQty(product.id, batch.id);
+      const stagedReserved = stagedByBatch.get(batch.id) ?? 0;
+      const freeInBatch = Math.max(batch.qtyAvailable - alreadyReserved - stagedReserved, 0);
+      if (freeInBatch <= 0) continue;
+      const take = Math.min(freeInBatch, remaining);
+      allocations.push({
+        batchId: batch.id,
+        qty: take,
+        unitCost: batch.purchasePrice,
+        purchaseDate: batch.purchaseDate,
+      });
+      remaining -= take;
+      if (remaining <= 0) break;
+    }
+    if (remaining > 0) return null;
+    return {
+      allocations,
+      totalCost: allocationsTotalCost(allocations),
+    };
+  }
+
+  function commitReservedAllocations(product: Product, allocations?: BatchAllocation[]) {
+    const sourceAllocations = allocations ?? [];
+    if (sourceAllocations.length === 0) {
+      return { batches: product.batches, totalCost: 0 };
+    }
+    const batches = product.batches.map((batch) => ({ ...batch }));
+    for (const allocation of sourceAllocations) {
+      const batch = batches.find((item) => item.id === allocation.batchId);
+      if (!batch || batch.qtyAvailable < allocation.qty) {
+        return null;
+      }
+      batch.qtyAvailable -= allocation.qty;
+    }
+    return {
+      batches,
+      totalCost: allocationsTotalCost(sourceAllocations),
+    };
+  }
+
   function writeOffInstalledPartsForOrder(order: ServiceOrder, comment: string) {
     let writtenOff = 0;
-    order.parts.forEach((part) => {
-      if (part.status === 'Встановлено') {
-        patchProduct(part.productId, (item) => ({ ...item, installed: Math.max(item.installed - part.qty, 0) }));
-        patchOrderPart(order.id, part.id, (item) => ({ ...item, status: 'Списано' }));
-        addMovement({
-          type: 'Списання',
-          productId: part.productId,
-          qty: part.qty,
-          orderId: order.id,
-          batchRefs: part.batchAllocations?.map((item) => `${item.batchId} x${item.qty}`).join(', '),
-          unitPrice: part.cost,
-          totalAmount: part.cost * part.qty,
-          comment,
-        });
-        logAction('Списання запчастини після оплати', order.id, `${productName(part.productId)}: ${part.qty} шт.`);
-        writtenOff += 1;
+    const nextProducts = products.map((product) => ({ ...product, batches: product.batches.map((batch) => ({ ...batch })) }));
+    const partsToWriteOff = order.parts.filter((part) => part.status === 'Встановлено');
+    for (const part of partsToWriteOff) {
+      const productIndex = nextProducts.findIndex((item) => item.id === part.productId);
+      if (productIndex === -1) continue;
+      const product = nextProducts[productIndex];
+      if (!partStockCommitted(part)) {
+        const committed = commitReservedAllocations(product, part.batchAllocations);
+        if (!committed) {
+          setNotice(`Не вдалося списати ${productName(part.productId)}: резервованої партії вже не вистачає.`);
+          return -1;
+        }
+        nextProducts[productIndex] = {
+          ...product,
+          stock: Math.max(product.stock - part.qty, 0),
+          reserved: Math.max(product.reserved - part.qty, 0),
+          installed: Math.max(product.installed - part.qty, 0),
+          batches: committed.batches,
+        };
+      } else {
+        nextProducts[productIndex] = {
+          ...product,
+          installed: Math.max(product.installed - part.qty, 0),
+        };
       }
+    }
+    setProducts(nextProducts);
+    setOrders((current) => current.map((item) => (
+      item.id === order.id
+        ? {
+            ...item,
+            parts: item.parts.map((part) => (
+              part.status === 'Встановлено'
+                ? { ...part, status: 'Списано', stockCommitted: true }
+                : part
+            )),
+          }
+        : item
+    )));
+    partsToWriteOff.forEach((part) => {
+      addMovement({
+        type: 'Списання',
+        productId: part.productId,
+        qty: part.qty,
+        orderId: order.id,
+        batchAllocations: part.batchAllocations,
+        batchRefs: part.batchAllocations?.map((item) => `${item.batchId} x${item.qty}`).join(', '),
+        unitPrice: part.cost,
+        totalAmount: part.cost * part.qty,
+        comment,
+      });
+      logAction('Списання запчастини після оплати', order.id, `${productName(part.productId)}: ${part.qty} шт.`);
+      writtenOff += 1;
     });
     return writtenOff;
   }
@@ -8983,49 +9116,64 @@ useEffect(() => {
       setNotice('Резерв неможливий: доступного залишку недостатньо.');
       return;
     }
+    const reserved = allocateReserveBatches(product, part.qty);
+    if (!reserved) {
+      setNotice('Резерв неможливий: по FIFO-партіях не вистачає доступного залишку.');
+      return;
+    }
     patchProduct(part.productId, (item) => ({ ...item, reserved: item.reserved + part.qty }));
-    patchOrderPart(order.id, part.id, (item) => ({ ...item, status: 'Зарезервовано' }));
-    addMovement({ type: 'Резерв', productId: part.productId, qty: part.qty, orderId: order.id, comment: 'Резерв після приходу товару.' });
-    logAction('Резерв після приходу', order.id, `${product.name}: ${part.qty} шт.`);
+    patchOrderPart(order.id, part.id, (item) => ({
+      ...item,
+      status: 'Зарезервовано',
+      cost: part.qty > 0 ? Math.round(reserved.totalCost / part.qty) : item.cost,
+      batchAllocations: reserved.allocations,
+      reservedAt: today,
+      reservedBy: activeUser.name,
+      stockCommitted: false,
+    }));
+    addMovement({
+      type: 'Резерв',
+      productId: part.productId,
+      qty: part.qty,
+      orderId: order.id,
+      batchAllocations: reserved.allocations,
+      batchRefs: reserved.allocations.map((line) => `${line.batchId} x${line.qty}`).join(', '),
+      unitPrice: part.qty > 0 ? Math.round(reserved.totalCost / part.qty) : 0,
+      totalAmount: reserved.totalCost,
+      comment: 'Резерв після приходу товару.',
+    });
+    logAction('Резерв після приходу', order.id, `${product.name}: ${part.qty} шт. · FIFO ${reserved.allocations.map((line) => `${line.batchId}/${line.qty}`).join(', ')}.`);
     setNotice(`Запчастину "${product.name}" зарезервовано під ${order.id}.`);
   }
 
   function issueToEngineer(order: ServiceOrder, part: OrderPart) {
     const product = products.find((item) => item.id === part.productId);
-    if (!product || part.status !== 'Зарезервовано' || product.reserved < part.qty || product.stock < part.qty) {
+    if (!product || part.status !== 'Зарезервовано' || product.reserved < part.qty) {
       setNotice('Видача неможлива: потрібен активний резерв.');
-      return;
-    }
-    const fifo = fifoConsumeBatches(product, part.qty);
-    if (!fifo) {
-      setNotice('Видача неможлива: по партіях не вистачає залишку, перевірте склад.');
       return;
     }
     patchProduct(part.productId, (item) => ({
       ...item,
-      stock: item.stock - part.qty,
-      reserved: item.reserved - part.qty,
       withEngineer: item.withEngineer + part.qty,
-      batches: fifo.batches,
     }));
     patchOrderPart(order.id, part.id, (item) => ({
       ...item,
       status: 'Видано інженеру',
-      cost: Math.round(fifo.totalCost / part.qty),
-      batchAllocations: fifo.allocations,
+      stockCommitted: false,
     }));
     addMovement({
       type: 'Видача інженеру',
       productId: part.productId,
       qty: part.qty,
       orderId: order.id,
-      batchRefs: fifo.allocations.map((line) => `${line.batchId} x${line.qty}`).join(', '),
-      unitPrice: part.qty > 0 ? Math.round(fifo.totalCost / part.qty) : 0,
-      totalAmount: fifo.totalCost,
-      comment: `Видано інженеру ${order.engineer}. FIFO: ${fifo.allocations.map((line) => `${line.batchId} x${line.qty}`).join(', ')}.`,
+      batchAllocations: part.batchAllocations,
+      batchRefs: part.batchAllocations?.map((line) => `${line.batchId} x${line.qty}`).join(', '),
+      unitPrice: part.cost,
+      totalAmount: part.cost * part.qty,
+      comment: `Видано інженеру ${order.engineer}. Резерв збережено до фінального списання.`,
     });
-    logAction('Видача інженеру', order.id, `${product.name}: ${part.qty} шт. видано ${order.engineer}. FIFO ${fifo.allocations.map((line) => `${line.batchId}/${line.qty}`).join(', ')}.`);
-    setNotice(`Запчастину видано інженеру ${order.engineer}. Списання по партіях виконано FIFO.`);
+    logAction('Видача інженеру', order.id, `${product.name}: ${part.qty} шт. видано ${order.engineer}. Резерв залишається активним.`);
+    setNotice(`Запчастину видано інженеру ${order.engineer}. Фізичне списання буде при закритті або видачі.`);
   }
 
   function markInstalled(order: ServiceOrder, part: OrderPart) {
@@ -9035,7 +9183,7 @@ useEffect(() => {
       return;
     }
     patchProduct(part.productId, (item) => ({ ...item, withEngineer: item.withEngineer - part.qty, installed: item.installed + part.qty }));
-    patchOrderPart(order.id, part.id, (item) => ({ ...item, status: 'Встановлено' }));
+    patchOrderPart(order.id, part.id, (item) => ({ ...item, status: 'Встановлено', stockCommitted: false }));
     addMovement({ type: 'Встановлення', productId: part.productId, qty: part.qty, orderId: order.id, comment: 'Інженер відмітив запчастину як встановлену.' });
     logAction('Встановлення запчастини', order.id, `${product.name}: ${part.qty} шт.`);
     setNotice('Запчастину встановлено. При закритті ремонту CRM спише собівартість документом.');
@@ -9060,23 +9208,7 @@ useEffect(() => {
       setNotice('Закрити замовлення не можна: акт виконаних робіт ще не підписано.');
       return;
     }
-    order.parts.forEach((part) => {
-      if (part.status === 'Встановлено') {
-        patchProduct(part.productId, (item) => ({ ...item, installed: Math.max(item.installed - part.qty, 0) }));
-        patchOrderPart(order.id, part.id, (item) => ({ ...item, status: 'Списано' }));
-        addMovement({
-          type: 'Списання',
-          productId: part.productId,
-          qty: part.qty,
-          orderId: order.id,
-          batchRefs: part.batchAllocations?.map((item) => `${item.batchId} x${item.qty}`).join(', '),
-          unitPrice: part.cost,
-          totalAmount: part.cost * part.qty,
-          comment: 'Автоматичне списання при закритті ремонту.',
-        });
-        logAction('Списання при закритті ремонту', order.id, `${productName(part.productId)}: ${part.qty} шт.`);
-      }
-    });
+    if (writeOffInstalledPartsForOrder(order, 'Автоматичне списання при закритті ремонту.') < 0) return;
     updateOrderStatus(order.id, 'Закрито');
     const warranty = addDocumentIfMissing('Гарантійний талон', 'service_order', order.id, order.client, 'Створено', order);
     enqueueClientNotification(order, 'Видача');
@@ -9126,23 +9258,7 @@ useEffect(() => {
       setNotice('Видати замовлення не можна: пристрій має бути фізично повернений у закріплену ячейку.');
       return;
     }
-    order.parts.forEach((part) => {
-      if (part.status === 'Встановлено') {
-        patchProduct(part.productId, (item) => ({ ...item, installed: Math.max(item.installed - part.qty, 0) }));
-        patchOrderPart(order.id, part.id, (item) => ({ ...item, status: 'Списано' }));
-        addMovement({
-          type: 'Списання',
-          productId: part.productId,
-          qty: part.qty,
-          orderId: order.id,
-          batchRefs: part.batchAllocations?.map((item) => `${item.batchId} x${item.qty}`).join(', '),
-          unitPrice: part.cost,
-          totalAmount: part.cost * part.qty,
-          comment: 'Автоматичне списання при видачі і закритті замовлення менеджером.',
-        });
-        logAction('Списання при видачі ремонту', order.id, `${productName(part.productId)}: ${part.qty} шт.`);
-      }
-    });
+    if (writeOffInstalledPartsForOrder(order, 'Автоматичне списання при видачі і закритті замовлення менеджером.') < 0) return;
     setOrders((current) => current.map((item) => {
       if (item.id !== order.id) return item;
       return {
@@ -9409,14 +9525,19 @@ useEffect(() => {
       const updatedProducts = products.map((product) => {
         const linkedParts = returnedParts.filter((part) => part.productId === product.id);
         if (linkedParts.length === 0) return product;
-        const restoredBatches = linkedParts.reduce((batches, part) => (
+        const committedParts = linkedParts.filter((part) => partStockCommitted(part));
+        const reservedParts = linkedParts.filter((part) => !partStockCommitted(part));
+        const restoredBatches = committedParts.reduce((batches, part) => (
           part.batchAllocations ? restoreBatchAllocations({ ...product, batches }, part.batchAllocations) : batches
         ), product.batches);
-        const totalQty = linkedParts.reduce((sum, part) => sum + part.qty, 0);
+        const committedQty = committedParts.reduce((sum, part) => sum + part.qty, 0);
+        const reservedQty = reservedParts.reduce((sum, part) => sum + part.qty, 0);
         return {
           ...product,
-          stock: product.stock + totalQty,
-          installed: Math.max(product.installed - totalQty, 0),
+          stock: product.stock + committedQty,
+          reserved: Math.max(product.reserved - reservedQty, 0),
+          withEngineer: Math.max(product.withEngineer - reservedParts.filter((part) => part.status === 'Видано інженеру').reduce((sum, part) => sum + part.qty, 0), 0),
+          installed: Math.max(product.installed - linkedParts.filter((part) => ['Встановлено', 'Списано'].includes(part.status)).reduce((sum, part) => sum + part.qty, 0), 0),
           batches: restoredBatches,
         };
       });
@@ -9436,7 +9557,7 @@ useEffect(() => {
       )));
       returnedParts.forEach((part) => {
         addMovement({
-          type: 'Повернення',
+          type: partStockCommitted(part) ? 'Повернення' : 'Зняття резерву',
           productId: part.productId,
           qty: part.qty,
           orderId: order.id,
@@ -9444,7 +9565,9 @@ useEffect(() => {
           batchRefs: part.batchAllocations?.map((item) => `${item.batchId} x${item.qty}`).join(', '),
           unitPrice: part.cost,
           totalAmount: part.cost * part.qty,
-          comment: `Замовлення скасовано. Запчастину повернено на склад автоматично.`,
+          comment: partStockCommitted(part)
+            ? 'Замовлення скасовано. Запчастину повернено на склад автоматично.'
+            : 'Замовлення скасовано. Резерв запчастини знято автоматично.',
         });
       });
     }
@@ -9704,23 +9827,7 @@ useEffect(() => {
         : order.payments,
       status: 'Готовий до видачі',
     };
-    issuedOrder.parts.forEach((part) => {
-      if (part.status === 'Встановлено') {
-        patchProduct(part.productId, (item) => ({ ...item, installed: Math.max(item.installed - part.qty, 0) }));
-        patchOrderPart(issuedOrder.id, part.id, (item) => ({ ...item, status: 'Списано' }));
-        addMovement({
-          type: 'Списання',
-          productId: part.productId,
-          qty: part.qty,
-          orderId: issuedOrder.id,
-          batchRefs: part.batchAllocations?.map((item) => `${item.batchId} x${item.qty}`).join(', '),
-          unitPrice: part.cost,
-          totalAmount: part.cost * part.qty,
-          comment: 'Автоматичне списання при видачі через міні-касу.',
-        });
-        logAction('Списання при видачі ремонту', issuedOrder.id, `${productName(part.productId)}: ${part.qty} шт.`);
-      }
-    });
+    if (writeOffInstalledPartsForOrder(issuedOrder, 'Автоматичне списання при видачі через міні-касу.') < 0) return;
     setOrders((current) => current.map((item) => {
       if (item.id !== issuedOrder.id) return item;
       return {
@@ -10094,17 +10201,8 @@ useEffect(() => {
     }
     if (part.status === 'Зарезервовано') {
       patchProduct(part.productId, (item) => ({ ...item, reserved: Math.max(item.reserved - part.qty, 0) }));
-      addMovement({ type: 'Зняття резерву', productId: part.productId, qty: part.qty, orderId: order.id, comment: 'Запчастина знята з ремонту до видачі інженеру.' });
-    }
-    if (part.status === 'Видано інженеру') {
-      patchProduct(part.productId, (item) => ({
-        ...item,
-        withEngineer: Math.max(item.withEngineer - part.qty, 0),
-        stock: destination === 'На склад' ? item.stock + part.qty : item.stock,
-        batches: destination === 'На склад' && part.batchAllocations ? restoreBatchAllocations(item, part.batchAllocations) : item.batches,
-      }));
       addMovement({
-        type: destination === 'На склад' ? 'Повернення' : 'Списання',
+        type: 'Зняття резерву',
         productId: part.productId,
         qty: part.qty,
         orderId: order.id,
@@ -10112,18 +10210,47 @@ useEffect(() => {
         batchRefs: part.batchAllocations?.map((item) => `${item.batchId} x${item.qty}`).join(', '),
         unitPrice: part.cost,
         totalAmount: part.cost * part.qty,
-        comment: destination === 'На склад' ? 'Деталь не підійшла, повернута на склад.' : 'Деталь не підійшла, переведена в брак.',
+        comment: 'Запчастина знята з ремонту до видачі інженеру.',
+      });
+    }
+    if (part.status === 'Видано інженеру') {
+      patchProduct(part.productId, (item) => {
+        const committed = partStockCommitted(part);
+        return {
+          ...item,
+          withEngineer: Math.max(item.withEngineer - part.qty, 0),
+          reserved: !committed ? Math.max(item.reserved - part.qty, 0) : item.reserved,
+          stock: destination === 'На склад' && committed ? item.stock + part.qty : item.stock,
+          batches: destination === 'На склад' && committed && part.batchAllocations ? restoreBatchAllocations(item, part.batchAllocations) : item.batches,
+        };
+      });
+      addMovement({
+        type: !partStockCommitted(part) ? 'Зняття резерву' : destination === 'На склад' ? 'Повернення' : 'Списання',
+        productId: part.productId,
+        qty: part.qty,
+        orderId: order.id,
+        batchAllocations: part.batchAllocations,
+        batchRefs: part.batchAllocations?.map((item) => `${item.batchId} x${item.qty}`).join(', '),
+        unitPrice: part.cost,
+        totalAmount: part.cost * part.qty,
+        comment: !partStockCommitted(part)
+          ? 'Деталь не підійшла, резерв знято до фінального списання.'
+          : destination === 'На склад' ? 'Деталь не підійшла, повернута на склад.' : 'Деталь не підійшла, переведена в брак.',
       });
     }
     if (part.status === 'Встановлено') {
-      patchProduct(part.productId, (item) => ({
-        ...item,
-        installed: Math.max(item.installed - part.qty, 0),
-        stock: destination === 'На склад' ? item.stock + part.qty : item.stock,
-        batches: destination === 'На склад' && part.batchAllocations ? restoreBatchAllocations(item, part.batchAllocations) : item.batches,
-      }));
+      patchProduct(part.productId, (item) => {
+        const committed = partStockCommitted(part);
+        return {
+          ...item,
+          installed: Math.max(item.installed - part.qty, 0),
+          reserved: !committed ? Math.max(item.reserved - part.qty, 0) : item.reserved,
+          stock: destination === 'На склад' && committed ? item.stock + part.qty : item.stock,
+          batches: destination === 'На склад' && committed && part.batchAllocations ? restoreBatchAllocations(item, part.batchAllocations) : item.batches,
+        };
+      });
       addMovement({
-        type: destination === 'На склад' ? 'Повернення' : 'Списання',
+        type: !partStockCommitted(part) ? 'Зняття резерву' : destination === 'На склад' ? 'Повернення' : 'Списання',
         productId: part.productId,
         qty: part.qty,
         orderId: order.id,
@@ -10131,7 +10258,9 @@ useEffect(() => {
         batchRefs: part.batchAllocations?.map((item) => `${item.batchId} x${item.qty}`).join(', '),
         unitPrice: part.cost,
         totalAmount: part.cost * part.qty,
-        comment: destination === 'На склад' ? 'Встановлена деталь знята і повернута на склад.' : 'Встановлена деталь знята і списана в брак.',
+        comment: !partStockCommitted(part)
+          ? 'Встановлена деталь знята до фінального списання, резерв вивільнено.'
+          : destination === 'На склад' ? 'Встановлена деталь знята і повернута на склад.' : 'Встановлена деталь знята і списана в брак.',
       });
     }
     patchOrderPart(order.id, part.id, (item) => ({ ...item, status: 'Повернення', price: 0, batchAllocations: destination === 'На склад' ? [] : item.batchAllocations }));
@@ -10170,6 +10299,8 @@ useEffect(() => {
 
   function reserveSale(sale: Sale) {
     let blocked = '';
+    const saleReservations = new Map<string, { allocations: BatchAllocation[]; totalCost: number }>();
+    const pendingByProduct = new Map<string, BatchAllocation[]>();
     sale.items.forEach((item) => {
       if (item.status !== 'Чернетка') return;
       const product = products.find((entry) => entry.id === item.productId);
@@ -10177,15 +10308,52 @@ useEffect(() => {
         blocked = `Недостатньо залишку для "${product?.name ?? item.productId}".`;
         return;
       }
-      patchProduct(item.productId, (entry) => ({ ...entry, reserved: entry.reserved + item.qty }));
-      addMovement({ type: 'Резерв', productId: item.productId, qty: item.qty, orderId: sale.id, comment: 'Резерв товару під продаж.' });
+      const reserved = allocateReserveBatches(product, item.qty, pendingByProduct.get(item.productId));
+      if (!reserved) {
+        blocked = `Не вдалося зарезервувати "${product.name}" по FIFO-партіях.`;
+        return;
+      }
+      saleReservations.set(item.id, reserved);
+      pendingByProduct.set(item.productId, [...(pendingByProduct.get(item.productId) ?? []), ...reserved.allocations]);
     });
     if (blocked) {
       setNotice(blocked);
       return;
     }
+    sale.items.forEach((item) => {
+      if (item.status !== 'Чернетка') return;
+      patchProduct(item.productId, (entry) => ({ ...entry, reserved: entry.reserved + item.qty }));
+      const reserved = saleReservations.get(item.id);
+      if (!reserved) return;
+      addMovement({
+        type: 'Резерв',
+        productId: item.productId,
+        qty: item.qty,
+        orderId: sale.id,
+        batchAllocations: reserved.allocations,
+        batchRefs: reserved.allocations.map((batch) => `${batch.batchId} x${batch.qty}`).join(', '),
+        unitPrice: item.qty > 0 ? Math.round(reserved.totalCost / item.qty) : 0,
+        totalAmount: reserved.totalCost,
+        comment: 'Резерв товару під продаж.',
+      });
+    });
     patchSale(sale.id, (item) => {
-      const next = { ...item, items: item.items.map((line) => (line.status === 'Чернетка' ? { ...line, status: 'Зарезервовано' as const } : line)) };
+      const next = {
+        ...item,
+        items: item.items.map((line) => (
+          line.status === 'Чернетка'
+            ? {
+                ...line,
+                status: 'Зарезервовано' as const,
+                cost: saleReservations.has(line.id) && line.qty > 0 ? Math.round((saleReservations.get(line.id)?.totalCost ?? 0) / line.qty) : line.cost,
+                batchAllocations: saleReservations.get(line.id)?.allocations ?? line.batchAllocations,
+                reservedAt: today,
+                reservedBy: activeUser.name,
+                stockCommitted: false,
+              }
+            : line
+        )),
+      };
       return { ...next, status: updateSaleStatus(next) };
     });
     logAction('Резерв продажу', sale.id, 'Товари зарезервовано під продаж.');
@@ -10318,8 +10486,8 @@ useEffect(() => {
         return;
       }
       const product = nextProducts[productIndex];
-      const fifo = fifoConsumeBatches(product, item.qty);
-      if (!fifo) {
+      const committed = commitReservedAllocations(product, item.batchAllocations);
+      if (!committed) {
         setNotice(`Не вдалося списати ${product.name}: по партіях недостатньо залишку для видачі.`);
         return;
       }
@@ -10327,20 +10495,20 @@ useEffect(() => {
         ...product,
         stock: product.stock - item.qty,
         reserved: Math.max(product.reserved - item.qty, 0),
-        batches: fifo.batches,
+        batches: committed.batches,
       };
       issuedItems.set(item.id, {
         ...item,
         status: 'Видано',
-        cost: Math.round(fifo.totalCost / item.qty),
-        batchAllocations: fifo.allocations,
+        cost: item.qty > 0 ? Math.round(committed.totalCost / item.qty) : item.cost,
+        stockCommitted: true,
       });
       saleMovements.push({
         productId: item.productId,
         qty: item.qty,
-        cost: Math.round(fifo.totalCost / item.qty),
-        batchAllocations: fifo.allocations,
-        comment: `Підтверджена видача клієнту, товар списано зі складу по FIFO. Партії: ${fifo.allocations.map((batch) => batch.batchId).join(', ')}.`,
+        cost: item.qty > 0 ? Math.round(committed.totalCost / item.qty) : item.cost,
+        batchAllocations: item.batchAllocations,
+        comment: `Підтверджена видача клієнту, товар списано зі складу по FIFO. Партії: ${item.batchAllocations?.map((batch) => batch.batchId).join(', ') ?? '—'}.`,
       });
     }
 
@@ -10370,7 +10538,17 @@ useEffect(() => {
     sale.items.forEach((item) => {
       if (item.status === 'Зарезервовано') {
         patchProduct(item.productId, (product) => ({ ...product, reserved: Math.max(product.reserved - item.qty, 0) }));
-        addMovement({ type: 'Зняття резерву', productId: item.productId, qty: item.qty, orderId: sale.id, comment: 'Продаж скасовано до видачі.' });
+        addMovement({
+          type: 'Зняття резерву',
+          productId: item.productId,
+          qty: item.qty,
+          orderId: sale.id,
+          batchAllocations: item.batchAllocations,
+          batchRefs: item.batchAllocations?.map((batch) => `${batch.batchId} x${batch.qty}`).join(', '),
+          unitPrice: item.cost,
+          totalAmount: item.cost * item.qty,
+          comment: 'Продаж скасовано до видачі.',
+        });
       }
     });
     patchSale(sale.id, (item) => ({ ...item, status: 'Скасовано', items: item.items.map((line) => ({ ...line, status: 'Скасовано' as const })) }));
@@ -11117,7 +11295,7 @@ useEffect(() => {
             oneClickManagerIssue={oneClickManagerIssue}
           />
         )}
-        {canViewPage(page) && page === 'parts' && <PartsPage products={products} requirements={requirements} receipts={receipts} movements={movements} productName={productName} showCost={canDo('cost.view')} receiveStockIntake={receiveStockIntake} canDo={canDo} onImportProducts={handleProductsImport} />}
+        {canViewPage(page) && page === 'parts' && <PartsPage products={products} requirements={requirements} receipts={receipts} movements={movements} orders={orders} sales={sales} productName={productName} showCost={canDo('cost.view')} receiveStockIntake={receiveStockIntake} canDo={canDo} onImportProducts={handleProductsImport} />}
         {canViewPage(page) && page === 'purchases' && (
           <PurchasesPage
             purchases={purchases}
@@ -16780,7 +16958,7 @@ function SalesPage(props: {
   );
 }
 
-function PartsPage({ products, requirements, receipts, movements, productName, showCost, receiveStockIntake, canDo, onImportProducts }: { products: Product[]; requirements: PartRequirement[]; receipts: GoodsReceipt[]; movements: StockMovement[]; productName: (id: string) => string; showCost: boolean; receiveStockIntake: (input: StockIntakeInput) => void; canDo: (permission: Permission) => boolean; onImportProducts: (file: File) => Promise<void> }) {
+function PartsPage({ products, requirements, receipts, movements, orders, sales, productName, showCost, receiveStockIntake, canDo, onImportProducts }: { products: Product[]; requirements: PartRequirement[]; receipts: GoodsReceipt[]; movements: StockMovement[]; orders: ServiceOrder[]; sales: Sale[]; productName: (id: string) => string; showCost: boolean; receiveStockIntake: (input: StockIntakeInput) => void; canDo: (permission: Permission) => boolean; onImportProducts: (file: File) => Promise<void> }) {
   const canReceiveStock = canDo('stock.receive');
   const [stockScanCode, setStockScanCode] = useState('');
   const [stockSearch, setStockSearch] = useState('');
@@ -16819,6 +16997,44 @@ function PartsPage({ products, requirements, receipts, movements, productName, s
       ...product.extraBarcodes,
     ].join(' ').toLowerCase().includes(needle);
   });
+  const productReservationRows = products.reduce((map, product) => {
+    const serviceRows = orders.flatMap((order) => order.parts
+      .filter((part) => part.productId === product.id && !partStockCommitted(part) && ['Зарезервовано', 'Видано інженеру', 'Встановлено'].includes(part.status))
+      .map((part) => ({
+        key: `${order.id}-${part.id}`,
+        reference: order.id,
+        qty: part.qty,
+        status: part.status,
+        actor: part.reservedBy || order.manager,
+        date: part.reservedAt || order.createdAt || order.intakeDate,
+      })));
+    const saleRows = sales.flatMap((sale) => sale.items
+      .filter((item) => item.productId === product.id && !saleItemStockCommitted(item) && item.status === 'Зарезервовано')
+      .map((item) => ({
+        key: `${sale.id}-${item.id}`,
+        reference: sale.id,
+        qty: item.qty,
+        status: item.status,
+        actor: item.reservedBy || sale.manager,
+        date: item.reservedAt || sale.date,
+      })));
+    map.set(product.id, [...serviceRows, ...saleRows].sort((a, b) => (parseDateTime(b.date)?.getTime() ?? 0) - (parseDateTime(a.date)?.getTime() ?? 0)));
+    return map;
+  }, new Map<string, Array<{ key: string; reference: string; qty: number; status: string; actor: string; date: string }>>());
+  const reserveAnalyticsRows = products
+    .map((product) => ({
+      product,
+      reservedQty: product.reserved,
+      availableQty: available(product),
+      reserveRows: productReservationRows.get(product.id) ?? [],
+    }))
+    .filter((row) => row.reservedQty > 0 || row.availableQty <= 0)
+    .sort((a, b) => b.reservedQty - a.reservedQty || a.availableQty - b.availableQty || a.product.name.localeCompare(b.product.name, 'uk'));
+  const averageReserveAge = (() => {
+    const reserveDates = Array.from(productReservationRows.values()).flatMap((rows) => rows.map((row) => row.date).filter(Boolean));
+    if (reserveDates.length === 0) return 0;
+    return Math.round(reserveDates.reduce((sum, date) => sum + daysSince(date), 0) / reserveDates.length);
+  })();
 
   function getStockTone(product: Product) {
     const free = available(product);
@@ -17050,6 +17266,12 @@ function PartsPage({ products, requirements, receipts, movements, productName, s
       </section>
       <section className="panel">
         <div className="panel-heading"><h2>Залишки на складі</h2><span>{filteredProducts.length} із {products.length}</span></div>
+        <section className="stats-grid">
+          <Metric icon={<Archive />} label="У резерві" value={`${products.reduce((sum, product) => sum + product.reserved, 0)} шт.`} hint="ще не списано фізично" />
+          <Metric icon={<PackageCheck />} label="Дефіцитні позиції" value={`${reserveAnalyticsRows.filter((row) => row.availableQty <= 0).length}`} hint="товари без доступного залишку" />
+          <Metric icon={<Clock3 />} label="Середній вік резерву" value={`${averageReserveAge} дн.`} hint="час до списання або зняття" />
+          <Metric icon={<TrendingUp />} label="Топ резервів" value={reserveAnalyticsRows[0] ? reserveAnalyticsRows[0].product.name : '—'} hint={reserveAnalyticsRows[0] ? `${reserveAnalyticsRows[0].reservedQty} шт.` : 'резервів немає'} />
+        </section>
         <div className="stock-table-search">
           <input
             value={stockSearch}
@@ -17071,6 +17293,7 @@ function PartsPage({ products, requirements, receipts, movements, productName, s
             const isExpanded = expandedProductId === product.id;
             const productReceipts = receipts.filter((receipt) => receipt.productId === product.id).slice(0, 5);
             const productMovements = movements.filter((movement) => movement.productId === product.id).slice(0, 8);
+            const reserveRows = productReservationRows.get(product.id) ?? [];
             return (
               <React.Fragment key={product.id}>
                 <button
@@ -17080,7 +17303,7 @@ function PartsPage({ products, requirements, receipts, movements, productName, s
                 >
                   <span>{product.sku}</span>
                   <span>{product.name}</span>
-                  <span>{available(product)} {product.unit}</span>
+                  <span>{product.stock} / резерв {product.reserved} / доступно {available(product)} {product.unit}</span>
                   <span>{product.min}</span>
                   <span>{product.storageLocation || '—'}</span>
                   <span className={tone.tone === 'danger' ? 'tag tag-red' : tone.tone === 'warning' ? 'tag tag-yellow' : 'tag'}>{tone.label}</span>
@@ -17093,9 +17316,33 @@ function PartsPage({ products, requirements, receipts, movements, productName, s
                         <span>SKU {product.sku}</span>
                         <span>{product.brand || '—'} {product.model || ''}</span>
                         <span>Штрих-коди: {productBarcodeList(product).join(', ') || '—'}</span>
+                        <span>Всього: {product.stock} {product.unit}</span>
+                        <span>У резерві: {product.reserved} {product.unit}</span>
+                        <span>Доступно: {available(product)} {product.unit}</span>
                       </div>
                     </div>
                     <div className="stock-product-detail-grid">
+                      <div className="stock-product-detail-block">
+                        <strong>Резерви по замовленнях</strong>
+                        <div className="table stock-detail-table">
+                          <div className="table-row table-head">
+                            <span>Замовлення</span>
+                            <span>Кількість</span>
+                            <span>Статус</span>
+                            <span>Хто зарезервував</span>
+                            <span>Дата</span>
+                          </div>
+                          {reserveRows.length > 0 ? reserveRows.map((row) => (
+                            <div key={row.key} className="table-row">
+                              <span>{row.reference}</span>
+                              <span>{row.qty}</span>
+                              <span>{row.status}</span>
+                              <span>{row.actor || '—'}</span>
+                              <span>{row.date || '—'}</span>
+                            </div>
+                          )) : <div className="empty-state">Активних резервів немає.</div>}
+                        </div>
+                      </div>
                       <div className="stock-product-detail-block">
                         <strong>Партії FIFO</strong>
                         <div className="table stock-detail-table">
