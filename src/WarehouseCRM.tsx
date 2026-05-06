@@ -865,7 +865,7 @@ type PayrollRule = {
   penaltyPerReturn?: number;
 };
 
-type Role = 'Руководитель' | 'Адміністратор' | 'Менеджер' | 'Інженер' | 'Комірник' | 'Бухгалтер' | 'Закупник';
+type Role = 'Директор' | 'Руководитель' | 'Адміністратор' | 'Менеджер' | 'Інженер' | 'Склад' | 'Комірник' | 'Бухгалтер' | 'Закупник';
 type InternalMessageStatus = 'Нове' | 'Прочитано' | 'Виконано';
 type InternalMessageImportance = 'Звичайна' | 'Важлива' | 'Критична';
 type InternalMessage = {
@@ -950,6 +950,8 @@ type User = {
   email?: string;
   authMode: AuthMode;
   password?: string;
+  pinCode?: string;
+  telegramLogin?: string;
   salaryType?: EngineerSalaryType;
   engineerPercent?: number;
   pieceRates?: EngineerPieceRate[];
@@ -2629,11 +2631,26 @@ function limitActionLogs(items: ActionLog[]) {
 }
 
 function loadActionLogsFromStorage() {
-  return [] as ActionLog[];
+  try {
+    const raw = localStorage.getItem(ACTION_LOGS_STORAGE_KEY);
+    if (!raw) return [] as ActionLog[];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? limitActionLogs(parsed as ActionLog[]) : [] as ActionLog[];
+  } catch {
+    return [] as ActionLog[];
+  }
 }
 
-function saveActionLogsToStorage(_items: ActionLog[]) {
-  // Temporarily disabled to prevent QuotaExceededError from crm_action_logs.
+function saveActionLogsToStorage(items: ActionLog[]) {
+  try {
+    localStorage.setItem(ACTION_LOGS_STORAGE_KEY, JSON.stringify(limitActionLogs(items)));
+  } catch {
+    try {
+      localStorage.removeItem(ACTION_LOGS_STORAGE_KEY);
+    } catch {
+      // Ignore storage cleanup errors for audit log only.
+    }
+  }
 }
 
 function loadCashShiftFromStorage() {
@@ -2691,6 +2708,17 @@ const companyBankAccounts: BankAccountRecord[] = [
   { id: 'BANK-PRIVAT-1', bankName: 'ПриватБанк', iban: 'UA213052990000026005000000002', currency: 'UAH', legalType: 'ФОП' },
 ];
 
+const SESSION_LOCK_TIMEOUT_MS = 10 * 60 * 1000;
+const SESSION_AUTO_LOGOUT_MS = 60 * 60 * 1000;
+
+function isDirectorRole(role: Role) {
+  return role === 'Директор' || role === 'Руководитель';
+}
+
+function isWarehouseRole(role: Role) {
+  return role === 'Склад' || role === 'Комірник';
+}
+
 const initialInternalMessages: InternalMessage[] = [
   {
     id: 'MSG-IN-1',
@@ -2731,28 +2759,42 @@ const initialInternalMessages: InternalMessage[] = [
 ];
 
 const rolePermissions: Record<Role, string[]> = {
+  Директор: ['Повний контроль', 'Фінанси', 'Звіти', 'Ролі', 'Користувачі', 'Експорт'],
   Руководитель: ['Повний контроль', 'Фінанси', 'Звіти', 'Ролі', 'Користувачі', 'Експорт'],
   Адміністратор: ['Ремонти', 'Продажі', 'Оплати', 'Повернення', 'Клієнти', 'Документи'],
   Менеджер: ['Створення ремонтів', 'Створення продажів', 'Резерв', 'Оплата', 'Видача'],
   Інженер: ['Перегляд ремонтів', 'Встановлення запчастин', 'Повернення деталі в сервісі'],
+  Склад: ['Залишки', 'Прихід', 'Резерв', 'Списання', 'Інвентаризація', 'Коригування'],
   Комірник: ['Залишки', 'Прихід', 'Резерв', 'Списання', 'Інвентаризація', 'Коригування'],
   Бухгалтер: ['Каса', 'Платежі', 'Повернення коштів', 'Звіти', 'НДС', 'Закупівлі', 'Собівартість', 'Експорт'],
   Закупник: ['Закупівлі', 'Постачальники', 'Статуси закупок', 'Закриття закупки'],
 };
 
-const baseEmployeeRoles: Role[] = ['Адміністратор', 'Руководитель', 'Менеджер', 'Інженер', 'Бухгалтер'];
+const baseEmployeeRoles: Role[] = ['Директор', 'Адміністратор', 'Менеджер', 'Інженер', 'Бухгалтер', 'Закупник', 'Склад'];
 
 const rolePageAccess: Record<Role, Page[]> = {
+  Директор: navItems.map((item) => item.id),
   Руководитель: navItems.map((item) => item.id),
   Адміністратор: navItems.map((item) => item.id),
   Менеджер: ['dashboard', 'clients', 'orders'],
   Інженер: ['my-orders'],
+  Склад: ['parts', 'purchases', 'storage', 'movements'],
   Комірник: ['parts', 'purchases', 'storage', 'movements'],
   Бухгалтер: ['finance', 'cash', 'documents', 'bank-import', 'reports', 'tax-invoices'],
   Закупник: ['parts', 'purchases', 'storage', 'movements'],
 };
 
 const roleFinePermissions: Record<Role, Permission[]> = {
+  Директор: [
+    'clients.view',
+    'repairs.view',
+    'sales.view',
+    'stock.view',
+    'purchases.view',
+    'finance.cash', 'finance.reports',
+    'reports.view', 'reports.export', 'reports.profit', 'reports.staff',
+    'cost.view', 'profit.view',
+  ],
   Руководитель: [
     'clients.view',
     'repairs.view',
@@ -2782,6 +2824,11 @@ const roleFinePermissions: Record<Role, Permission[]> = {
   ],
   Інженер: [
     'repairs.view', 'repairs.edit', 'repairs.status',
+  ],
+  Склад: [
+    'stock.view', 'stock.receive', 'stock.reserve', 'stock.unreserve', 'stock.writeoff', 'stock.inventory', 'stock.adjust',
+    'purchases.view', 'purchases.create', 'purchases.edit', 'purchases.send', 'purchases.status',
+    'sales.view',
   ],
   Комірник: [
     'stock.view', 'stock.receive', 'stock.reserve', 'stock.unreserve', 'stock.writeoff', 'stock.inventory', 'stock.adjust',
@@ -4122,11 +4169,13 @@ const statusDisplayMap: Partial<Record<OrderStatus, string>> = {
   'Пауза / відкладено': 'Пауза',
 };
 const roleDisplayMap: Record<Role, string> = {
-  Руководитель: 'Руководитель',
+  Директор: 'Директор',
+  Руководитель: 'Директор',
   Адміністратор: 'Администратор',
   Менеджер: 'Менеджер',
   Інженер: 'Инженер',
-  Комірник: 'Кладовщик',
+  Склад: 'Склад',
+  Комірник: 'Склад',
   Бухгалтер: 'Бухгалтер',
   Закупник: 'Закупщик',
 };
@@ -4206,10 +4255,11 @@ function roleDisplay(role: Role) {
 function roleWorkspaceHint(role: Role) {
   if (role === 'Менеджер') return 'приём заказов, клиент, оплата, выдача';
   if (role === 'Інженер') return 'ремонт, запчасти, тестирование';
-  if (role === 'Комірник') return 'склад, прихід, рух, залишки';
+  if (isWarehouseRole(role)) return 'склад, партії, FIFO, резерв і рух товару';
+  if (role === 'Закупник') return 'закупки, постачальники, залишки та борги постачальникам';
   if (role === 'Бухгалтер') return 'каса, документи, вигрузка в бухгалтерію';
   if (role === 'Адміністратор') return 'доступи, співробітники, повний контроль системи';
-  if (role === 'Руководитель') return 'контроль заказов, сотрудников и финансов';
+  if (isDirectorRole(role)) return 'контроль бізнесу, фінансів, документів і команди';
   return 'рабочее пространство CRM';
 }
 
@@ -4314,7 +4364,7 @@ function defaultPermissionsForRole(role: Role): UserPermissions {
   if (role === 'Адміністратор') {
     return { canAccessWarehouse: true, canAccessFinance: true, canAccessEmployees: true, canAccessSettings: true, canAccessReports: true };
   }
-  if (role === 'Руководитель') {
+  if (isDirectorRole(role)) {
     return { canAccessWarehouse: true, canAccessFinance: true, canAccessEmployees: true, canAccessSettings: false, canAccessReports: true };
   }
   if (role === 'Менеджер') {
@@ -4326,7 +4376,7 @@ function defaultPermissionsForRole(role: Role): UserPermissions {
   if (role === 'Бухгалтер') {
     return { canAccessWarehouse: false, canAccessFinance: true, canAccessEmployees: false, canAccessSettings: false, canAccessReports: true };
   }
-  if (role === 'Комірник') {
+  if (isWarehouseRole(role)) {
     return { canAccessWarehouse: true, canAccessFinance: false, canAccessEmployees: false, canAccessSettings: false, canAccessReports: false };
   }
   if (role === 'Закупник') {
@@ -4336,15 +4386,19 @@ function defaultPermissionsForRole(role: Role): UserPermissions {
 }
 
 function normalizeUserRecord(user: User): User {
-  const defaultPermissions = defaultPermissionsForRole(user.role);
-  const defaultSalaryType: EngineerSalaryType | undefined = user.role === 'Інженер' ? 'percentage' : undefined;
-  const defaultEngineerPercent = user.role === 'Інженер' ? 40 : undefined;
+  const normalizedRole: Role = user.role === 'Руководитель' ? 'Директор' : user.role === 'Комірник' ? 'Склад' : user.role;
+  const defaultPermissions = defaultPermissionsForRole(normalizedRole);
+  const defaultSalaryType: EngineerSalaryType | undefined = normalizedRole === 'Інженер' ? 'percentage' : undefined;
+  const defaultEngineerPercent = normalizedRole === 'Інженер' ? 40 : undefined;
   return {
     ...user,
+    role: normalizedRole,
     phone: user.phone ? normalizePhone(String(user.phone)) : undefined,
+    pinCode: user.pinCode ? String(user.pinCode).trim() : undefined,
+    telegramLogin: user.telegramLogin ? String(user.telegramLogin).trim() : undefined,
     salaryType: user.salaryType ?? defaultSalaryType,
     engineerPercent: user.engineerPercent ?? defaultEngineerPercent,
-    pieceRates: user.pieceRates?.length ? user.pieceRates : (user.role === 'Інженер' ? defaultEngineerPieceRates.map((item) => ({ ...item })) : undefined),
+    pieceRates: user.pieceRates?.length ? user.pieceRates : (normalizedRole === 'Інженер' ? defaultEngineerPieceRates.map((item) => ({ ...item })) : undefined),
     permissions: {
       ...defaultPermissions,
       ...user.permissions,
@@ -4361,7 +4415,7 @@ function hasAccess(role: Role, page: Page) {
 }
 
 function hasPermissionBasedPageAccess(user: User, page: Page) {
-  if (user.role === 'Адміністратор') return true;
+  if (user.role === 'Адміністратор' || isDirectorRole(user.role)) return true;
   if (['parts', 'purchases', 'storage', 'movements'].includes(page)) return user.permissions.canAccessWarehouse;
   if (['finance', 'cash', 'documents', 'bank-import', 'tax-invoices'].includes(page)) return user.permissions.canAccessFinance;
   if (['employee-control', 'team', 'payroll'].includes(page)) return user.permissions.canAccessEmployees;
@@ -4375,7 +4429,7 @@ function canRoleViewPage(user: User, targetPage: Page) {
 }
 
 function hasPermissionOverride(user: User, permission: Permission) {
-  if (user.role === 'Адміністратор') return true;
+  if (user.role === 'Адміністратор' || isDirectorRole(user.role)) return true;
   if (permission.startsWith('stock.') || permission.startsWith('purchases.')) return user.permissions.canAccessWarehouse;
   if (permission.startsWith('finance.')) return user.permissions.canAccessFinance;
   if (permission.startsWith('reports.')) return user.permissions.canAccessReports;
@@ -4412,7 +4466,7 @@ function navLabelForRole(page: Page, role: Role) {
     if (page === 'dashboard') return 'Рабочий стол';
     if (page === 'my-orders') return 'Мои ремонты';
   }
-  if (role === 'Руководитель') {
+  if (isDirectorRole(role)) {
     if (page === 'dashboard') return 'Контроль';
     if (page === 'orders') return 'Все заказы';
     if (page === 'finance') return 'Финансы';
@@ -4542,18 +4596,19 @@ function buildServiceProblems(orders: ServiceOrder[], documents: PrintDocument[]
 
 function defaultPageForUser(user: User): Page {
   if (user.role === 'Адміністратор') return 'dashboard';
-  if (user.role === 'Руководитель') return 'dashboard';
+  if (isDirectorRole(user.role)) return 'dashboard';
   if (user.role === 'Менеджер') return 'dashboard';
   if (user.role === 'Інженер') return 'my-orders';
   if (user.role === 'Бухгалтер') return 'finance';
-  if (user.role === 'Комірник' || user.role === 'Закупник') return 'parts';
+  if (isWarehouseRole(user.role) || user.role === 'Закупник') return 'parts';
   return 'dashboard';
 }
 
-const adminPreviewRoles: Role[] = ['Адміністратор', 'Руководитель', 'Менеджер', 'Інженер', 'Бухгалтер', 'Комірник', 'Закупник'];
+const adminPreviewRoles: Role[] = ['Директор', 'Адміністратор', 'Менеджер', 'Інженер', 'Бухгалтер', 'Склад', 'Закупник'];
 
 function adminPreviewRoleLabel(role: Role) {
-  if (role === 'Руководитель') return 'Керівник';
+  if (isDirectorRole(role)) return 'Директор';
+  if (isWarehouseRole(role)) return 'Склад';
   return role;
 }
 
@@ -4915,6 +4970,11 @@ useEffect(() => {
   const [loginError, setLoginError] = useState('');
   const [loginHint, setLoginHint] = useState('');
   const [loginChallenge, setLoginChallenge] = useState<LoginChallenge | null>(null);
+  const [isSessionLocked, setIsSessionLocked] = useState(false);
+  const [lockReason, setLockReason] = useState<'idle' | 'manual'>('idle');
+  const [unlockPin, setUnlockPin] = useState('');
+  const [lastActivityTs, setLastActivityTs] = useState(() => Date.now());
+  const [lockedAtTs, setLockedAtTs] = useState(0);
   const [adminPreviewRole, setAdminPreviewRole] = useState<Role>('Адміністратор');
   const [adminPreviewUserId, setAdminPreviewUserId] = useState('');
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
@@ -5007,10 +5067,6 @@ useEffect(() => {
   }, [activeUserId, sessionUserId]);
 
   useEffect(() => {
-    try { localStorage.removeItem(ACTION_LOGS_STORAGE_KEY); } catch {}
-  }, []);
-
-  useEffect(() => {
     if (!query.trim()) {
       setShowGlobalSearchResults(false);
     }
@@ -5032,7 +5088,7 @@ useEffect(() => {
   }, [users, sessionUserId, sessionUserRecord, activeUserRecord]);
 
   useEffect(() => {
-    if (!activeUserRecord || !['Адміністратор', 'Руководитель'].includes(activeUserRecord.role)) {
+    if (!activeUserRecord || !(activeUserRecord.role === 'Адміністратор' || isDirectorRole(activeUserRecord.role))) {
       if (adminPreviewRole !== 'Адміністратор') setAdminPreviewRole('Адміністратор');
       if (adminPreviewUserId) setAdminPreviewUserId('');
     }
@@ -5153,6 +5209,10 @@ useEffect(() => {
   useEffect(() => {
     saveFinanceExpensesToStorage(financeExpenses);
   }, [financeExpenses]);
+
+  useEffect(() => {
+    saveActionLogsToStorage(actionLogs);
+  }, [actionLogs]);
 
   useEffect(() => {
     saveContractsToStorage(contracts);
@@ -5541,6 +5601,9 @@ useEffect(() => {
     if (activeUser) {
       prependActionLog({ id: uid('LOG'), date: today, user: activeUser.name, role: activeUser.role, action: 'Вихід із системи', entity: 'Сесія', comment: 'Сесію завершено користувачем.' });
     }
+    setIsSessionLocked(false);
+    setUnlockPin('');
+    setLockedAtTs(0);
     setAdminPreviewRole('Адміністратор');
     setAdminPreviewUserId('');
     setSessionUserId('');
@@ -5552,10 +5615,75 @@ useEffect(() => {
     setLoginHint('');
   }
 
+  function unlockSession() {
+    if (!activeUser.pinCode) {
+      setIsSessionLocked(false);
+      setUnlockPin('');
+      setLockedAtTs(0);
+      setLastActivityTs(Date.now());
+      return;
+    }
+    if (unlockPin.trim() !== activeUser.pinCode.trim()) {
+      setLoginError('Невірний PIN-код для розблокування.');
+      return;
+    }
+    setIsSessionLocked(false);
+    setUnlockPin('');
+    setLockedAtTs(0);
+    setLastActivityTs(Date.now());
+    setLoginError('');
+    prependActionLog({ id: uid('LOG'), date: today, user: activeUser.name, role: activeUser.role, action: 'Розблокування сесії', entity: 'Сесія', comment: 'Екран розблоковано PIN-кодом.' });
+  }
+
   const sessionUser = sessionUserRecord;
   const activeUser = activeUserRecord ?? sessionUserRecord ?? hookSafeUser;
-  const isAdminPreviewAvailable = ['Адміністратор', 'Руководитель'].includes(activeUser.role);
-  const currentRole = adminPreviewRole;
+  const isAdminPreviewAvailable = activeUser ? (activeUser.role === 'Адміністратор' || isDirectorRole(activeUser.role)) : false;
+
+  useEffect(() => {
+    if (!sessionUserId) {
+      setIsSessionLocked(false);
+      setUnlockPin('');
+      setLockedAtTs(0);
+      return;
+    }
+    const updateActivity = () => setLastActivityTs(Date.now());
+    updateActivity();
+    window.addEventListener('pointerdown', updateActivity);
+    window.addEventListener('keydown', updateActivity);
+    window.addEventListener('mousemove', updateActivity);
+    return () => {
+      window.removeEventListener('pointerdown', updateActivity);
+      window.removeEventListener('keydown', updateActivity);
+      window.removeEventListener('mousemove', updateActivity);
+    };
+  }, [sessionUserId]);
+
+  useEffect(() => {
+    if (!sessionUserId || isSessionLocked) return;
+    const intervalId = window.setInterval(() => {
+      const now = Date.now();
+      if (now - lastActivityTs >= SESSION_LOCK_TIMEOUT_MS) {
+        setIsSessionLocked(true);
+        setLockReason('idle');
+        setLockedAtTs(now);
+        setUnlockPin('');
+        prependActionLog({ id: uid('LOG'), date: today, user: activeUser.name, role: activeUser.role, action: 'Блокування сесії', entity: 'Сесія', comment: 'Екран заблоковано через бездіяльність.' });
+      }
+    }, 10000);
+    return () => window.clearInterval(intervalId);
+  }, [sessionUserId, isSessionLocked, lastActivityTs, activeUser]);
+
+  useEffect(() => {
+    if (!isSessionLocked || !lockedAtTs) return;
+    const intervalId = window.setInterval(() => {
+      if (Date.now() - lockedAtTs >= SESSION_AUTO_LOGOUT_MS) {
+        logoutEmployee();
+      }
+    }, 10000);
+    return () => window.clearInterval(intervalId);
+  }, [isSessionLocked, lockedAtTs]);
+  const currentRole = isAdminPreviewAvailable ? adminPreviewRole : activeUser.role;
+  const canLockScreen = Boolean(sessionUserId);
   const previewUsers = users.filter((user) => user.role === currentRole);
   const selectedPreviewUser = previewUsers.find((user) => user.id === adminPreviewUserId) ?? null;
   const currentUser = selectedPreviewUser ?? (currentRole === activeUser.role ? activeUser : null);
@@ -5563,8 +5691,8 @@ useEffect(() => {
     ? (currentUser ? normalizeUserRecord(currentUser) : buildPreviewUser(currentRole, activeUser))
     : activeUser;
 
-  const canSwitchUsers = sessionUser?.role === 'Руководитель' && sessionUser.session === 'Активна';
-  const isOwnerControlView = sessionUser?.role === 'Руководитель' && activeUser.id !== sessionUser.id;
+  const canSwitchUsers = Boolean(sessionUser && isDirectorRole(sessionUser.role) && sessionUser.session === 'Активна');
+  const isOwnerControlView = Boolean(sessionUser && isDirectorRole(sessionUser.role) && activeUser.id !== sessionUser.id);
   const canViewPage = (targetPage: Page) => canRoleViewPage(viewUser, targetPage);
   const canDo = (permission: Permission) => roleFinePermissions[viewUser.role].includes(permission) || hasPermissionOverride(viewUser, permission);
   const visibleNavItems = navItems
@@ -5584,7 +5712,7 @@ useEffect(() => {
   const selectedMyOrder = myOrders.find((order) => order.id === selectedOrderId) ?? myOrders[0] ?? selectedRepairOrder;
   const selectedOrder = page === 'my-orders' ? selectedMyOrder : selectedRepairOrder;
   const selectedSale = sales.find((sale) => sale.id === selectedSaleId) ?? sales[0];
-  const visibleInternalMessages = viewUser.role === 'Руководитель'
+  const visibleInternalMessages = isDirectorRole(viewUser.role)
     ? internalMessages
     : internalMessages.filter((message) => message.toUser === viewUser.name || message.toRole === viewUser.role);
   const unreadInternalMessages = visibleInternalMessages.filter((message) => message.status === 'Нове').length;
@@ -5676,7 +5804,7 @@ useEffect(() => {
   }
 
   function prependActionLog(_entry: ActionLog) {
-    // Temporarily disabled to prevent crm_action_logs growth and storage quota errors.
+    setActionLogs((current) => limitActionLogs([_entry, ...current]));
   }
 
   function logAction(action: string, entity: string, comment: string) {
@@ -5746,6 +5874,10 @@ useEffect(() => {
   }
 
   function restoreBackupSnapshot(snapshotId: string) {
+    if (activeUser.role !== 'Адміністратор' && !isDirectorRole(activeUser.role)) {
+      setNotice('Відновлення backup доступне тільки директору або адміністратору.');
+      return;
+    }
     const snapshot = backups.find((item) => item.id === snapshotId);
     if (!snapshot) {
       setNotice('Резервну копію не знайдено.');
@@ -7717,6 +7849,10 @@ useEffect(() => {
   }
 
   function updateDocumentStatus(documentId: string, status: PrintDocument['status']) {
+    if (!canDo('documents.edit.closed') && activeUser.role !== 'Адміністратор' && !isDirectorRole(activeUser.role) && status !== 'Відправлено') {
+      setNotice('У вашої ролі немає права змінювати статуси старих документів.');
+      return;
+    }
     let updatedDocument: PrintDocument | undefined;
     setDocuments((current) => current.map((document) => {
       if (document.id !== documentId) return document;
@@ -9053,7 +9189,7 @@ useEffect(() => {
       return '';
     }
     const allowedNext = orderStatusFlow[order.status] ?? [];
-    if (order.status !== nextStatus && !allowedNext.includes(nextStatus) && activeUser.role !== 'Руководитель' && activeUser.role !== 'Адміністратор') {
+    if (order.status !== nextStatus && !allowedNext.includes(nextStatus) && !isDirectorRole(activeUser.role) && activeUser.role !== 'Адміністратор') {
       return `Перехід "${order.status}" -> "${nextStatus}" не дозволений бізнес-процесом.`;
     }
     if (!roleCanSetOrderStatus(activeUser.role, nextStatus)) {
@@ -9258,6 +9394,10 @@ useEffect(() => {
   }
 
   function cancelOrder(order: ServiceOrder, reason?: string, comment?: string) {
+    if (!canDo('repairs.cancel') && activeUser.role !== 'Адміністратор' && !isDirectorRole(activeUser.role)) {
+      setNotice('У вашої ролі немає права скасовувати замовлення.');
+      return;
+    }
     const reasonText = reason?.trim();
     const commentText = comment?.trim();
     if (!reasonText) {
@@ -9698,6 +9838,10 @@ useEffect(() => {
   }
 
   function cancelPayment(paymentId: string, reason: string, comment = '') {
+    if (!canDo('finance.adjust') && activeUser.role !== 'Адміністратор' && !isDirectorRole(activeUser.role) && activeUser.role !== 'Бухгалтер') {
+      setNotice('У вашої ролі немає права змінювати або скасовувати оплату.');
+      return;
+    }
     const reasonText = reason.trim() || 'Скасування платежу';
     let cancelledPayment: Payment | undefined;
     let affectedEntity = paymentId;
@@ -9817,6 +9961,10 @@ useEffect(() => {
   }
 
   function refundPayment(paymentId: string, amountInput: string, reason: string, method: PaymentMethod) {
+    if (!canDo('finance.refund') && activeUser.role !== 'Адміністратор' && !isDirectorRole(activeUser.role) && activeUser.role !== 'Бухгалтер') {
+      setNotice('У вашої ролі немає права робити повернення коштів.');
+      return;
+    }
     const refundAmount = Number(amountInput);
     const reasonText = reason.trim() || 'Повернення коштів';
     if (!Number.isFinite(refundAmount) || refundAmount <= 0) {
@@ -10284,6 +10432,32 @@ useEffect(() => {
       />
     );
   }
+  if (isSessionLocked) {
+    return (
+      <div className="page-grid" style={{ minHeight: '100vh', alignContent: 'center', justifyItems: 'center', padding: '32px' }}>
+        <section className="panel" style={{ width: '100%', maxWidth: '420px' }}>
+          <div className="panel-heading"><h2>Екран заблоковано</h2><span>{lockReason === 'idle' ? 'через бездіяльність' : 'ручне блокування'}</span></div>
+          <div className="table purchase-detail-form">
+            <label>
+              Користувач
+              <input value={`${activeUser.name} · ${roleDisplay(activeUser.role)}`} readOnly />
+            </label>
+            {activeUser.pinCode && (
+              <label>
+                PIN-код
+                <input type="password" value={unlockPin} onChange={(event) => setUnlockPin(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') unlockSession(); }} placeholder="Введіть PIN" />
+              </label>
+            )}
+          </div>
+          <div className="action-row">
+            <button type="button" className="submit-button" onClick={unlockSession}>Розблокувати</button>
+            <button type="button" onClick={logoutEmployee}>Вийти</button>
+          </div>
+          {loginError && <div className="empty-state" style={{ marginTop: '12px', color: '#b91c1c' }}>{loginError}</div>}
+        </section>
+      </div>
+    );
+  }
   return (
     <div className="app-shell">
       <main className="workspace">
@@ -10392,7 +10566,7 @@ useEffect(() => {
           </div>
           <div className="current-user-badge">
             <strong>👤 {activeUser.name}</strong>
-            <span>{activeUser.role === 'Руководитель' ? 'режим контроля руководителя' : roleWorkspaceHint(activeUser.role)}</span>
+            <span>{isDirectorRole(activeUser.role) ? 'режим контроля директора' : roleWorkspaceHint(activeUser.role)}</span>
           </div>
           {isAdminPreviewAvailable && (
             <>
@@ -10433,6 +10607,7 @@ useEffect(() => {
               className="return-owner-button"
               type="button"
               onClick={() => {
+                if (!sessionUser) return;
                 setActiveUserId(sessionUser.id);
                 prependActionLog({ id: uid('LOG'), date: today, user: sessionUser.name, role: sessionUser.role, action: 'Повернення до керівника', entity: 'Робочий стіл', comment: 'Керівник повернувся зі службового перегляду ролі.' });
                 stayOnCurrentPage();
@@ -10446,6 +10621,7 @@ useEffect(() => {
               className="role-select"
               value={activeUserId}
               onChange={(event) => {
+                if (!sessionUser) return;
                 const nextUser = users.find((user) => user.id === event.target.value) ?? sessionUser;
                 setActiveUserId(nextUser.id);
                 prependActionLog({ id: uid('LOG'), date: today, user: sessionUser.name, role: sessionUser.role, action: 'Контроль ролі', entity: 'Робочий стіл', comment: `Керівник відкрив робочий стіл ролі ${nextUser.role}: ${nextUser.name}.` });
@@ -10454,6 +10630,23 @@ useEffect(() => {
             >
               {users.map((user) => <option key={user.id} value={user.id}>{user.name} · {user.role}</option>)}
             </select>
+          )}
+          {canLockScreen && (
+            <button
+              className="icon-button"
+              type="button"
+              onClick={() => {
+                setIsSessionLocked(true);
+                setLockReason('manual');
+                setLockedAtTs(Date.now());
+                setUnlockPin('');
+                prependActionLog({ id: uid('LOG'), date: today, user: activeUser.name, role: activeUser.role, action: 'Ручне блокування', entity: 'Сесія', comment: 'Користувач заблокував екран вручну.' });
+              }}
+              aria-label="Заблокувати екран"
+              title="Заблокувати екран"
+            >
+              <ShieldCheck size={18} />
+            </button>
           )}
           <button className="icon-button" style={{ marginLeft: 'auto' }} type="button" onClick={logoutEmployee} aria-label="Вийти" title="Вийти">
             <LogOut size={18} />
@@ -10679,7 +10872,7 @@ useEffect(() => {
             createContractAct={createContractAct}
             createInvoiceForContractAct={createInvoiceForContractAct}
             closeContract={closeContract}
-            readOnly={viewUser.role === 'Руководитель'}
+            readOnly={isDirectorRole(viewUser.role)}
           />
         )}
         {canViewPage(page) && page === 'sales' && (
@@ -11184,7 +11377,7 @@ function InboxPage({
       });
   }
 
-  if (activeUser.role === 'Закупник' || activeUser.role === 'Комірник') {
+  if (activeUser.role === 'Закупник' || isWarehouseRole(activeUser.role)) {
     products
       .filter((product) => available(product) < Math.max(product.min, 1))
       .sort((a, b) => (available(a) - a.min) - (available(b) - b.min))
@@ -11296,13 +11489,13 @@ function MessageFeed({
     <section className="message-feed" aria-label="Внутрішні повідомлення">
       <div className="message-feed-head">
         <div>
-          <span>{activeUser.role === 'Руководитель' ? 'Центр повідомлень' : 'Мої задачі'}</span>
-          <h2>{activeUser.role === 'Руководитель' ? 'Адресні повідомлення команди' : 'Адресні повідомлення для мене'}</h2>
+          <span>{isDirectorRole(activeUser.role) ? 'Центр повідомлень' : 'Мої задачі'}</span>
+          <h2>{isDirectorRole(activeUser.role) ? 'Адресні повідомлення команди' : 'Адресні повідомлення для мене'}</h2>
         </div>
         <strong>{messages.filter((message) => message.status === 'Нове').length} нових</strong>
       </div>
 
-      {activeUser.role === 'Руководитель' && (
+      {isDirectorRole(activeUser.role) && (
         <form
           className="message-feed-form"
           onSubmit={(event) => {
@@ -11312,7 +11505,7 @@ function MessageFeed({
           }}
         >
           <select value={toUserId} onChange={(event) => setToUserId(event.target.value)} aria-label="Кому">
-            {users.filter((user) => user.role !== 'Руководитель').map((user) => <option key={user.id} value={user.id}>{user.role} — {user.name}</option>)}
+            {users.filter((user) => !isDirectorRole(user.role)).map((user) => <option key={user.id} value={user.id}>{user.role} — {user.name}</option>)}
           </select>
           <select value={orderId} onChange={(event) => setOrderId(event.target.value)} aria-label="Замовлення">
             <option value="">Без замовлення</option>
@@ -11651,7 +11844,7 @@ function Dashboard({
   const isManager = activeUser.role === 'Менеджер' || activeUser.role === 'Адміністратор';
   const isAccountant = activeUser.role === 'Бухгалтер';
   const isStock = activeUser.permissions.canAccessWarehouse;
-  const isOwner = activeUser.role === 'Руководитель' || activeUser.role === 'Адміністратор';
+  const isOwner = isDirectorRole(activeUser.role) || activeUser.role === 'Адміністратор';
   const roleOrders = isEngineer ? orders.filter((order) => order.engineer === activeUser.name) : orders;
   const roleActiveRepairs = roleOrders.filter((order) => !['Закрито', 'Скасовано', 'Видано', 'Не підлягає ремонту'].includes(order.status));
   const roleReadyOrders = roleOrders.filter((order) => ['Готовий до видачі', 'Не підлягає ремонту', 'Очікує клієнта', 'Очікує оплати'].includes(order.status));
@@ -13314,7 +13507,7 @@ function OrdersPage(props: {
 }) {
   const isEngineer = props.activeUser.role === 'Інженер';
   const isManager = props.activeUser.role === 'Менеджер';
-  const isSupervisor = props.activeUser.role === 'Руководитель';
+  const isSupervisor = isDirectorRole(props.activeUser.role);
   const deviceIcon = (device: string) => {
     const value = device.toLowerCase();
     if (value.includes('printer') || value.includes('laserjet') || value.includes('принтер') || value.includes('мфу')) return '🖨';
@@ -15165,7 +15358,7 @@ function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations,
   const nextStatuses = orderStatusFlow[selectedOrder.status] ?? [];
   const isEngineerRole = activeUser.role === 'Інженер';
   const isManagerRole = activeUser.role === 'Менеджер';
-  const isSupervisorRole = activeUser.role === 'Руководитель';
+  const isSupervisorRole = isDirectorRole(activeUser.role);
   const isAdminRole = activeUser.role === 'Адміністратор';
   const canSeeFinance = !isEngineerRole;
   const canManageDocuments = isManagerRole || isAdminRole;
@@ -20151,7 +20344,7 @@ function PayrollPage({ orders, activeUser, users, engineerPayments, addEngineerP
   const visibleDayOperations = completedVisibleRows.filter((row) => row.completedAt && extractDayKey(row.completedAt) === todayKey).length;
   const visibleMonthOperations = completedVisibleRows.filter((row) => row.completedAt && extractMonthKey(row.completedAt) === monthKey).length;
   const isEngineer = activeUser.role === 'Інженер';
-  const isSupervisor = activeUser.role === 'Руководитель' || activeUser.role === 'Адміністратор';
+  const isSupervisor = isDirectorRole(activeUser.role) || activeUser.role === 'Адміністратор';
   const submitEngineerPayment = () => {
     if (!paymentDraft) return;
     const ok = addEngineerPayment(paymentDraft);
