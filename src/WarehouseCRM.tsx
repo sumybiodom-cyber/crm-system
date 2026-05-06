@@ -2794,11 +2794,11 @@ const SESSION_LOCK_TIMEOUT_MS = 10 * 60 * 1000;
 const SESSION_AUTO_LOGOUT_MS = 60 * 60 * 1000;
 
 function isDirectorRole(role: Role) {
-  return role === 'Директор' || role === 'Руководитель';
+  return normalizeRoleAlias(role) === 'Директор';
 }
 
 function isWarehouseRole(role: Role) {
-  return role === 'Склад' || role === 'Комірник';
+  return normalizeRoleAlias(role) === 'Склад';
 }
 
 const initialInternalMessages: InternalMessage[] = [
@@ -3436,11 +3436,79 @@ function stockMovementTypeLabel(movement: StockMovement) {
   return movement.type;
 }
 
+function normalizeRoleAlias(role: Role): Role {
+  if (role === 'Руководитель') return 'Директор';
+  if (role === 'Комірник') return 'Склад';
+  return role;
+}
+
+function appliedPaymentRecords(payments: Payment[]) {
+  return payments.filter(paymentCountsAsApplied);
+}
+
+function appliedPaymentTotal(payments: Payment[]) {
+  return appliedPaymentRecords(payments).reduce((sum, payment) => sum + payment.amount, 0);
+}
+
+function unifiedOrderNotificationHistory(order: ServiceOrder, notifications: ClientNotification[]) {
+  const logMap = new Map<string, ClientNotification>();
+  [...notifications, ...(order.notificationHistory ?? [])].forEach((item) => {
+    const key = item.id || `${item.orderId}-${item.event}-${item.channel}-${item.createdAt}`;
+    if (!logMap.has(key)) logMap.set(key, item);
+  });
+  return [...logMap.values()].sort((a, b) => (parseDateTime(b.createdAt)?.getTime() ?? 0) - (parseDateTime(a.createdAt)?.getTime() ?? 0));
+}
+
+function normalizePrintDocumentStatus(status: PrintDocument['status']): PrintDocument['status'] {
+  if (status === 'PDF збережено') return 'Роздруковано';
+  return status;
+}
+
+function canonicalOrderProfitMetrics(order: ServiceOrder, users?: User[]) {
+  const works = order.works.reduce((sum, work) => sum + work.price * (work.qty ?? 1), 0);
+  const parts = order.parts.reduce((sum, part) => sum + part.price * part.qty, 0);
+  const delivery = order.deliveryAmount ?? 0;
+  const additionalExpenses = order.additionalExpenses ?? 0;
+  const consumables = order.consumablesAmount ?? 0;
+  const externalServices = order.externalServicesAmount ?? 0;
+  const billedTotal = works + parts + delivery;
+  const paid = appliedPaymentTotal(order.payments);
+  const purchaseCost = order.parts.filter((part) => part.status !== 'Повернення').reduce((sum, part) => sum + part.cost * part.qty, 0);
+  const engineerSalary = order.works.reduce((sum, work) => {
+    if (users) return sum + calculateEngineerWorkCompensation(order, work, users).earning;
+    const engineerName = work.engineer ?? order.engineer;
+    const rule = payrollRules.find((item) => item.employee === engineerName);
+    return sum + payrollForWork(order, work, rule);
+  }, 0);
+  const cost = purchaseCost + engineerSalary + delivery + additionalExpenses + consumables + externalServices;
+  const legacyProfit = billedTotal - cost;
+  const realizedProfit = paid - purchaseCost - engineerSalary;
+  const isFinal = ['Закрито', 'Видано'].includes(order.status);
+  return {
+    works,
+    parts,
+    delivery,
+    additionalExpenses,
+    consumables,
+    externalServices,
+    billedTotal,
+    paid,
+    debt: Math.max(billedTotal - paid, 0),
+    purchaseCost,
+    engineerSalary,
+    cost,
+    legacyProfit,
+    realizedProfit,
+    displayProfit: realizedProfit,
+    isFinal,
+  };
+}
+
 function saleTotals(sale: Sale) {
   const activeItems = sale.items.filter((item) => item.status !== 'Скасовано');
   const sum = activeItems.reduce((total, item) => total + item.price * item.qty, 0);
   const discount = activeItems.reduce((total, item) => total + item.discount, 0);
-  const paid = sale.payments.filter(paymentCountsAsApplied).reduce((total, payment) => total + payment.amount, 0);
+  const paid = appliedPaymentTotal(sale.payments);
   const cost = activeItems.filter((item) => item.status === 'Видано').reduce((total, item) => total + item.cost * item.qty, 0);
   const returns = sale.returns.reduce((total, item) => total + item.refund, 0);
   const total = Math.max(sum - discount, 0);
@@ -3448,33 +3516,37 @@ function saleTotals(sale: Sale) {
 }
 
 function orderTotals(order: ServiceOrder) {
-  const works = order.works.reduce((sum, work) => sum + work.price * (work.qty ?? 1), 0);
-  const parts = order.parts.reduce((sum, part) => sum + part.price * part.qty, 0);
-  const delivery = order.deliveryAmount ?? 0;
-  const additionalExpenses = order.additionalExpenses ?? 0;
-  const consumables = order.consumablesAmount ?? 0;
-  const externalServices = order.externalServicesAmount ?? 0;
-  const paid = order.payments.filter(paymentCountsAsApplied).reduce((sum, payment) => sum + payment.amount, 0);
-  const purchaseCost = order.parts.filter((part) => part.status !== 'Повернення').reduce((sum, part) => sum + part.cost * part.qty, 0);
-  const engineerSalary = order.works.reduce((sum, work) => {
-    const engineerName = work.engineer ?? order.engineer;
-    const rule = payrollRules.find((item) => item.employee === engineerName);
-    return sum + payrollForWork(order, work, rule);
-  }, 0);
-  const cost = purchaseCost + engineerSalary + delivery + additionalExpenses + consumables + externalServices;
-  const total = works + parts + delivery;
-  const isFinal = ['Закрито', 'Видано'].includes(order.status);
-  return { works, parts, delivery, additionalExpenses, consumables, externalServices, total, paid, debt: Math.max(total - paid, 0), purchaseCost, engineerSalary, cost, profit: total - cost, finalProfit: isFinal ? total - cost : 0, isFinal };
+  const summary = canonicalOrderProfitMetrics(order);
+  return {
+    works: summary.works,
+    parts: summary.parts,
+    delivery: summary.delivery,
+    additionalExpenses: summary.additionalExpenses,
+    consumables: summary.consumables,
+    externalServices: summary.externalServices,
+    total: summary.billedTotal,
+    paid: summary.paid,
+    debt: summary.debt,
+    purchaseCost: summary.purchaseCost,
+    engineerSalary: summary.engineerSalary,
+    cost: summary.cost,
+    profit: summary.displayProfit,
+    finalProfit: summary.displayProfit,
+    legacyProfit: summary.legacyProfit,
+    isFinal: summary.isFinal,
+  };
 }
 
 function orderActualProfit(order: ServiceOrder, users?: User[]) {
-  const totals = orderTotals(order);
-  const totalPaid = totals.paid;
-  const partsCost = totals.purchaseCost;
-  const engineerSalary = order.works.reduce((sum, work) => sum + calculateEngineerWorkCompensation(order, work, users).earning, 0);
-  const expenses = partsCost + engineerSalary;
-  const profit = totalPaid - expenses;
-  return { totalPaid, partsCost, engineerSalary, expenses, profit };
+  const summary = canonicalOrderProfitMetrics(order, users);
+  return {
+    totalPaid: summary.paid,
+    partsCost: summary.purchaseCost,
+    engineerSalary: summary.engineerSalary,
+    expenses: summary.purchaseCost + summary.engineerSalary,
+    profit: summary.displayProfit,
+    legacyProfit: summary.legacyProfit,
+  };
 }
 
 function paymentTypeFor(amount: number, debtBeforePayment: number, fallback: PaymentType): PaymentType {
@@ -4477,32 +4549,33 @@ function findExactClientMatch(clients: ClientRecord[], rawNeedle: string) {
 }
 
 function defaultPermissionsForRole(role: Role): UserPermissions {
-  if (role === 'Адміністратор') {
+  const normalizedRole = normalizeRoleAlias(role);
+  if (normalizedRole === 'Адміністратор') {
     return { canAccessWarehouse: true, canAccessFinance: true, canAccessEmployees: true, canAccessSettings: true, canAccessReports: true };
   }
-  if (isDirectorRole(role)) {
+  if (isDirectorRole(normalizedRole)) {
     return { canAccessWarehouse: true, canAccessFinance: true, canAccessEmployees: true, canAccessSettings: false, canAccessReports: true };
   }
-  if (role === 'Менеджер') {
+  if (normalizedRole === 'Менеджер') {
     return { canAccessWarehouse: false, canAccessFinance: false, canAccessEmployees: false, canAccessSettings: false, canAccessReports: false };
   }
-  if (role === 'Інженер') {
+  if (normalizedRole === 'Інженер') {
     return { canAccessWarehouse: false, canAccessFinance: false, canAccessEmployees: false, canAccessSettings: false, canAccessReports: false };
   }
-  if (role === 'Бухгалтер') {
+  if (normalizedRole === 'Бухгалтер') {
     return { canAccessWarehouse: false, canAccessFinance: true, canAccessEmployees: false, canAccessSettings: false, canAccessReports: true };
   }
-  if (isWarehouseRole(role)) {
+  if (isWarehouseRole(normalizedRole)) {
     return { canAccessWarehouse: true, canAccessFinance: false, canAccessEmployees: false, canAccessSettings: false, canAccessReports: false };
   }
-  if (role === 'Закупник') {
+  if (normalizedRole === 'Закупник') {
     return { canAccessWarehouse: true, canAccessFinance: false, canAccessEmployees: false, canAccessSettings: false, canAccessReports: true };
   }
   return { canAccessWarehouse: false, canAccessFinance: false, canAccessEmployees: false, canAccessSettings: false, canAccessReports: false };
 }
 
 function normalizeUserRecord(user: User): User {
-  const normalizedRole: Role = user.role === 'Руководитель' ? 'Директор' : user.role === 'Комірник' ? 'Склад' : user.role;
+  const normalizedRole: Role = normalizeRoleAlias(user.role);
   const defaultPermissions = defaultPermissionsForRole(normalizedRole);
   const defaultSalaryType: EngineerSalaryType | undefined = normalizedRole === 'Інженер' ? 'percentage' : undefined;
   const defaultEngineerPercent = normalizedRole === 'Інженер' ? 40 : undefined;
@@ -4527,7 +4600,7 @@ function normalizeUsers(records: User[]) {
 }
 
 function hasAccess(role: Role, page: Page) {
-  return rolePageAccess[role].includes(page);
+  return rolePageAccess[normalizeRoleAlias(role)].includes(page);
 }
 
 function hasPermissionBasedPageAccess(user: User, page: Page) {
@@ -4541,11 +4614,11 @@ function hasPermissionBasedPageAccess(user: User, page: Page) {
 }
 
 function canRoleViewPage(user: User, targetPage: Page) {
-  return hasAccess(user.role, targetPage) || hasPermissionBasedPageAccess(user, targetPage);
+  return hasAccess(normalizeRoleAlias(user.role), targetPage) || hasPermissionBasedPageAccess(user, targetPage);
 }
 
 function hasPermissionOverride(user: User, permission: Permission) {
-  if (user.role === 'Адміністратор' || isDirectorRole(user.role)) return true;
+  if (normalizeRoleAlias(user.role) === 'Адміністратор' || isDirectorRole(user.role)) return true;
   if (permission.startsWith('stock.') || permission.startsWith('purchases.')) return user.permissions.canAccessWarehouse;
   if (permission.startsWith('finance.')) return user.permissions.canAccessFinance;
   if (permission.startsWith('reports.')) return user.permissions.canAccessReports;
@@ -5815,7 +5888,7 @@ useEffect(() => {
   const canSwitchUsers = Boolean(sessionUser && isDirectorRole(sessionUser.role) && sessionUser.session === 'Активна');
   const isOwnerControlView = Boolean(sessionUser && isDirectorRole(sessionUser.role) && activeUser.id !== sessionUser.id);
   const canViewPage = (targetPage: Page) => canRoleViewPage(viewUser, targetPage);
-  const canDo = (permission: Permission) => roleFinePermissions[viewUser.role].includes(permission) || hasPermissionOverride(viewUser, permission);
+  const canDo = (permission: Permission) => roleFinePermissions[normalizeRoleAlias(viewUser.role)].includes(permission) || hasPermissionOverride(viewUser, permission);
   const visibleNavItems = navItems
     .filter((item) => canViewPage(item.id))
     .filter((item) => !(viewUser.role === 'Менеджер' && item.id === 'orders'));
@@ -8021,7 +8094,7 @@ useEffect(() => {
       document.entityType === 'service_order' && document.entityId === order.id && document.kind === kind
         ? {
             ...document,
-            status: document.kind === 'Акт надання послуг' || document.kind === 'Гарантійний талон' || document.kind === 'Видаткова накладна' ? 'Роздруковано' : document.status,
+            status: document.kind === 'Акт надання послуг' || document.kind === 'Гарантійний талон' || document.kind === 'Видаткова накладна' ? normalizePrintDocumentStatus('Роздруковано') : normalizePrintDocumentStatus(document.status),
             printedAt: document.printedAt ?? today,
             printedBy: document.printedBy ?? activeUser.name,
           }
@@ -8085,20 +8158,21 @@ useEffect(() => {
       setNotice('У вашої ролі немає права змінювати статуси старих документів.');
       return;
     }
+    const nextStatus = normalizePrintDocumentStatus(status);
     let updatedDocument: PrintDocument | undefined;
     setDocuments((current) => current.map((document) => {
       if (document.id !== documentId) return document;
       updatedDocument = {
         ...document,
-        status,
-        signedAt: status === 'Підписано' ? (document.signedAt ?? today) : document.signedAt,
-        signedBy: status === 'Підписано' ? (document.signedBy ?? activeUser.name) : document.signedBy,
+        status: nextStatus,
+        signedAt: nextStatus === 'Підписано' ? (document.signedAt ?? today) : document.signedAt,
+        signedBy: nextStatus === 'Підписано' ? (document.signedBy ?? activeUser.name) : document.signedBy,
       };
       return updatedDocument;
     }));
     if (!updatedDocument) return;
-    logAction('Зміна статусу документа', updatedDocument.entityId, `${updatedDocument.kind} ${updatedDocument.number}: ${status}.`);
-    setNotice(`Статус документа ${updatedDocument.number} оновлено: ${status}.`);
+    logAction('Зміна статусу документа', updatedDocument.entityId, `${updatedDocument.kind} ${updatedDocument.number}: ${nextStatus}.`);
+    setNotice(`Статус документа ${updatedDocument.number} оновлено: ${nextStatus}.`);
   }
 
   function sendDocumentReminder(orderId: string, reason: 'unsigned_act' | 'invoice_unpaid' | 'debt') {
@@ -15252,7 +15326,10 @@ function OrdersPage(props: {
                           </div>
                           <div className="manager-order-field">
                             <strong>Останнє повідомлення</strong>
-                            <div>{order.notificationHistory?.[0] ? `${notificationDisplay(order.notificationHistory[0].event)} · ${order.notificationHistory[0].status}` : 'Ще не надсилали'}</div>
+                            {(() => {
+                              const latestNotification = unifiedOrderNotificationHistory(order, props.notifications.filter((item) => item.orderId === order.id))[0];
+                              return <div>{latestNotification ? `${notificationDisplay(latestNotification.event)} · ${latestNotification.status}` : 'Ще не надсилали'}</div>;
+                            })()}
                           </div>
                         </div>
                       </div>
@@ -15829,7 +15906,7 @@ function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations,
   const canTransferBas = isReadyForClient && hasIssueAct && hasDocument('Рахунок на оплату') && totals.paid > 0 && (selectedOrder.parts.length === 0 || hasDocument('Видаткова накладна'));
   const clientNotified = notifications.some((item) => item.status === 'sent' || item.status === 'test');
   const selectedNotificationStatus = notifications.find((item) => item.event === selectedNotificationEvent && (item.status === 'sent' || item.status === 'test'));
-  const lastOrderNotification = notifications[0] ?? selectedOrder.notificationHistory?.[0];
+  const lastOrderNotification = unifiedOrderNotificationHistory(selectedOrder, notifications)[0];
   const canPreviewOrderDocuments = isManagerRole || isSupervisorRole || isAdminRole;
   const canPreviewInvoice = canPreviewOrderDocuments && totals.total > 0;
   const canPreviewAct = canPreviewOrderDocuments && selectedOrder.status === 'Готовий до видачі';
@@ -21543,7 +21620,7 @@ function SettingsPage({
           <div className="panel-heading"><h2>Точкові права</h2><span>{activeUser.role}</span></div>
           <div className="task-list">
             <Task icon={<ShieldCheck />} title="Поточна роль" text={`${activeUser.name}: ${activeUser.role}. 2FA: ${activeUser.twoFactor ? 'увімкнено' : 'не увімкнено'}.`} />
-            <Task icon={<CheckCircle2 />} title="Дозволено" text={roleFinePermissions[activeUser.role].join(', ')} />
+            <Task icon={<CheckCircle2 />} title="Дозволено" text={roleFinePermissions[normalizeRoleAlias(activeUser.role)].join(', ')} />
             <Task icon={<X />} title="Заборонено без окремого права" text="Видалення проведених документів, зміна старих залишків, зміна ціни після продажу, редагування закритого ремонту, зміна оплати заднім числом, списання без причини, повернення без посилання." />
           </div>
         </div>
