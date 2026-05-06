@@ -382,7 +382,22 @@ type PartRequirement = {
 type PurchaseOrder = {
   id: string;
   supplier: string;
-  items: Array<{ productId: string; qty: number; price: number; received: number; requirementId?: string; orderId?: string }>;
+  documentNumber?: string;
+  purchaseDate?: string;
+  items: Array<{
+    productId: string;
+    productName?: string;
+    category?: string;
+    qty: number;
+    price: number;
+    salePrice?: number;
+    shelfLocation?: string;
+    warranty?: string;
+    comment?: string;
+    received: number;
+    requirementId?: string;
+    orderId?: string;
+  }>;
   status: PurchaseStatus;
   orderedAt: string;
   expectedAt: string;
@@ -390,7 +405,7 @@ type PurchaseOrder = {
   priority?: PurchasePriority;
   sourceLink?: string;
   comment?: string;
-  paymentType?: 'bank' | 'cash';
+  paymentType?: 'bank' | 'cash' | 'card' | 'other';
   bankPaymentId?: string;
   cashAmount?: number;
   purchasedAt?: string;
@@ -405,6 +420,10 @@ type GoodsReceipt = {
   productId: string;
   qty: number;
   price: number;
+  salePrice?: number;
+  shelfLocation?: string;
+  documentNumber?: string;
+  createdBy?: string;
   purchaseId: string;
 };
 
@@ -417,6 +436,8 @@ type StockMovement = {
   orderId?: string;
   purchaseId?: string;
   actor?: string;
+  supplier?: string;
+  documentNumber?: string;
   basis?: string;
   batchAllocations?: BatchAllocation[];
   batchRefs?: string;
@@ -2407,19 +2428,43 @@ function saveRequirementsToStorage(items: PartRequirement[]) {
   localStorage.setItem(REQUIREMENTS_STORAGE_KEY, JSON.stringify(items));
 }
 
+function normalizeStoredPurchase(purchase: PurchaseOrder): PurchaseOrder {
+  return {
+    ...purchase,
+    supplier: String(purchase.supplier ?? 'Не вибрано').trim(),
+    documentNumber: purchase.documentNumber ? String(purchase.documentNumber).trim() : purchase.id,
+    purchaseDate: purchase.purchaseDate ? String(purchase.purchaseDate) : purchase.orderedAt ?? today,
+    paymentType: purchase.paymentType ?? 'bank',
+    comment: purchase.comment ? String(purchase.comment) : '',
+    requestedBy: purchase.requestedBy ? String(purchase.requestedBy) : '',
+    items: Array.isArray(purchase.items) ? purchase.items.map((item) => ({
+      ...item,
+      productName: item.productName ? String(item.productName) : undefined,
+      category: item.category ? String(item.category) : undefined,
+      salePrice: Number(item.salePrice) > 0 ? Number(item.salePrice) : undefined,
+      shelfLocation: item.shelfLocation ? String(item.shelfLocation) : undefined,
+      warranty: item.warranty ? String(item.warranty) : undefined,
+      comment: item.comment ? String(item.comment) : undefined,
+      qty: Math.max(0, Number(item.qty) || 0),
+      price: Math.max(0, Number(item.price) || 0),
+      received: Math.max(0, Number(item.received) || 0),
+    })) : [],
+  };
+}
+
 function loadPurchasesFromStorage() {
   try {
     const raw = localStorage.getItem(PURCHASES_STORAGE_KEY);
     if (!raw) return [] as PurchaseOrder[];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed as PurchaseOrder[] : [];
+    return Array.isArray(parsed) ? parsed.map((item) => normalizeStoredPurchase(item as PurchaseOrder)) : [];
   } catch {
     return [] as PurchaseOrder[];
   }
 }
 
 function savePurchasesToStorage(items: PurchaseOrder[]) {
-  localStorage.setItem(PURCHASES_STORAGE_KEY, JSON.stringify(items));
+  localStorage.setItem(PURCHASES_STORAGE_KEY, JSON.stringify(items.map((item) => normalizeStoredPurchase(item))));
 }
 
 function loadReceiptsFromStorage() {
@@ -8274,14 +8319,28 @@ useEffect(() => {
       {
         id: purchaseId,
         supplier: 'Не вибрано',
-        items: [{ productId: part.productId, qty: part.qty, price: part.cost, received: 0, requirementId, orderId: order.id }],
+        documentNumber: purchaseId,
+        purchaseDate: today,
+        items: [{
+          productId: part.productId,
+          productName: productName(part.productId),
+          category: products.find((product) => product.id === part.productId)?.category,
+          qty: part.qty,
+          price: part.cost,
+          salePrice: products.find((product) => product.id === part.productId)?.price,
+          shelfLocation: products.find((product) => product.id === part.productId)?.storageLocation,
+          comment: `Закупівля під замовлення ${order.id}.`,
+          received: 0,
+          requirementId,
+          orderId: order.id,
+        }],
         status: 'Нова',
         orderedAt: today,
         expectedAt: '22.04.2026',
         reason: 'Під замовлення',
         priority: 'Високий',
         requestedBy: activeUser.name,
-      },
+      } satisfies PurchaseOrder,
       ...current,
     ]);
     patchOrderPart(order.id, part.id, (item) => ({ ...item, status: 'Замовлено', requirementId, purchaseId }));
@@ -8344,6 +8403,46 @@ useEffect(() => {
     setNotice(`Заявку на закупівлю для ${product.name} створено.`);
   }
 
+  function createPurchaseOrder(input: {
+    supplier: string;
+    documentNumber: string;
+    purchaseDate: string;
+    paymentType: 'bank' | 'cash' | 'card' | 'other';
+    comment: string;
+    items: PurchaseOrder['items'];
+  }) {
+    const cleanedItems = input.items
+      .filter((item) => item.productId && item.qty > 0 && item.price > 0)
+      .map((item) => ({
+        ...item,
+        received: item.received ?? 0,
+      }));
+    if (!input.supplier.trim() || !input.documentNumber.trim() || !input.purchaseDate || cleanedItems.length === 0) {
+      setNotice('Для закупівлі вкажіть постачальника, документ, дату і хоча б одну позицію.');
+      return false;
+    }
+    const purchaseId = uid('PO');
+    setPurchases((current) => [
+      normalizeStoredPurchase({
+        id: purchaseId,
+        supplier: input.supplier.trim(),
+        documentNumber: input.documentNumber.trim(),
+        purchaseDate: input.purchaseDate,
+        items: cleanedItems,
+        status: 'Нова',
+        orderedAt: input.purchaseDate,
+        expectedAt: input.purchaseDate,
+        comment: input.comment.trim(),
+        paymentType: input.paymentType,
+        requestedBy: activeUser.name,
+      }),
+      ...current,
+    ]);
+    logAction('Створення закупівлі', purchaseId, `${input.supplier.trim()} · ${input.documentNumber.trim()} · позицій: ${cleanedItems.length}.`);
+    setNotice(`Закупівлю ${purchaseId} створено.`);
+    return true;
+  }
+
   function createPurchaseFromRequirement(requirementId: string) {
     const requirement = requirements.find((item) => item.id === requirementId);
     const product = requirement ? products.find((item) => item.id === requirement.productId) : null;
@@ -8360,7 +8459,21 @@ useEffect(() => {
       {
         id: purchaseId,
         supplier: requirement.supplier?.trim() || 'Не вибрано',
-        items: [{ productId: requirement.productId, qty: requirement.qty, price: requirement.purchasePrice ?? product.cost, received: 0, requirementId, orderId: requirement.orderId || undefined }],
+        documentNumber: purchaseId,
+        purchaseDate: today,
+        items: [{
+          productId: requirement.productId,
+          productName: product.name,
+          category: product.category,
+          qty: requirement.qty,
+          price: requirement.purchasePrice ?? product.cost,
+          salePrice: product.price,
+          shelfLocation: product.storageLocation,
+          comment: requirement.comment,
+          received: 0,
+          requirementId,
+          orderId: requirement.orderId || undefined,
+        }],
         status: 'Нова',
         orderedAt: today,
         expectedAt: today,
@@ -8369,7 +8482,7 @@ useEffect(() => {
         sourceLink: requirement.sourceLink,
         comment: requirement.comment,
         requestedBy: requirement.requester ?? activeUser.name,
-      },
+      } satisfies PurchaseOrder,
       ...current,
     ]);
     patchRequirement(requirementId, (item) => ({ ...item, status: 'Замовлено' }));
@@ -8400,28 +8513,48 @@ useEffect(() => {
     purchase.items.forEach((item) => {
       const qtyToReceive = item.qty - item.received;
       if (qtyToReceive <= 0) return;
+      const receiptDate = purchase.purchaseDate || today;
+      const documentNumber = purchase.documentNumber || purchaseId;
+      const batchId = uid('BAT');
       patchProduct(item.productId, (product) => ({
         ...product,
         stock: product.stock + qtyToReceive,
         cost: item.price,
+        price: item.salePrice && item.salePrice > 0 ? item.salePrice : product.price,
+        storageLocation: item.shelfLocation?.trim() || product.storageLocation,
         batches: [
           ...product.batches,
           {
-            id: uid('BAT'),
+            id: batchId,
             productId: item.productId,
+            productName: item.productName || product.name,
             qtyTotal: qtyToReceive,
             qtyAvailable: qtyToReceive,
             purchasePrice: item.price,
-            purchaseDate: today,
+            salePrice: item.salePrice && item.salePrice > 0 ? item.salePrice : product.price,
+            purchaseDate: receiptDate,
             source: purchase.supplier,
             supplier: purchase.supplier,
-            documentNo: purchaseId,
-            comment: `Партія створена з закупки ${purchaseId}.`,
+            documentNo: documentNumber,
+            shelfLocation: item.shelfLocation?.trim() || product.storageLocation,
+            comment: item.comment?.trim() || `Партія створена з закупки ${purchaseId}.`,
           },
         ],
       }));
       setReceipts((current) => [
-        { id: uid('GR'), date: today, supplier: purchase.supplier, productId: item.productId, qty: qtyToReceive, price: item.price, purchaseId },
+        {
+          id: uid('GR'),
+          date: receiptDate,
+          supplier: purchase.supplier,
+          productId: item.productId,
+          qty: qtyToReceive,
+          price: item.price,
+          salePrice: item.salePrice,
+          shelfLocation: item.shelfLocation,
+          documentNumber,
+          createdBy: purchase.requestedBy || activeUser.name,
+          purchaseId,
+        },
         ...current,
       ]);
       addMovement({
@@ -8429,11 +8562,14 @@ useEffect(() => {
         productId: item.productId,
         qty: qtyToReceive,
         purchaseId,
-        basis: purchaseId,
-        batchRefs: `${purchaseId}:${qtyToReceive}`,
+        supplier: purchase.supplier,
+        documentNumber,
+        basis: documentNumber,
+        batchAllocations: [{ batchId, qty: qtyToReceive, unitCost: item.price, purchaseDate: receiptDate }],
+        batchRefs: `${batchId}:${qtyToReceive}`,
         unitPrice: item.price,
         totalAmount: qtyToReceive * item.price,
-        comment: 'Прихід за закупівлею. CRM пропонує резерв під замовлення.',
+        comment: `Прихід за закупівлею ${purchaseId}. ${purchase.supplier} · документ ${documentNumber}.`,
       });
       if (item.requirementId) {
         setRequirements((current) => current.map((req) => (req.id === item.requirementId ? { ...req, status: 'Прибуло' } : req)));
@@ -8451,7 +8587,7 @@ useEffect(() => {
     setPurchases((current) =>
       current.map((item) =>
         item.id === purchaseId
-          ? { ...item, status: 'Отримано', receivedAt: today, items: item.items.map((line) => ({ ...line, received: line.qty })) }
+          ? { ...item, status: 'Отримано', receivedAt: purchase.purchaseDate || today, items: item.items.map((line) => ({ ...line, received: line.qty })) }
           : item,
       ),
     );
@@ -10527,6 +10663,7 @@ useEffect(() => {
             products={products}
             productName={productName}
             receivePurchase={receivePurchase}
+            createPurchaseOrder={createPurchaseOrder}
             createManualPurchaseRequest={createManualPurchaseRequest}
             createPurchaseFromRequirement={createPurchaseFromRequirement}
             updatePurchaseProcurementMeta={updatePurchaseProcurementMeta}
@@ -16577,6 +16714,7 @@ function PurchasesPage({
   products,
   productName,
   receivePurchase,
+  createPurchaseOrder,
   createManualPurchaseRequest,
   createPurchaseFromRequirement,
   updatePurchaseProcurementMeta,
@@ -16588,6 +16726,7 @@ function PurchasesPage({
   products: Product[];
   productName: (id: string) => string;
   receivePurchase: (id: string) => void;
+  createPurchaseOrder: (input: { supplier: string; documentNumber: string; purchaseDate: string; paymentType: 'bank' | 'cash' | 'card' | 'other'; comment: string; items: PurchaseOrder['items'] }) => boolean;
   createManualPurchaseRequest: (input: { productId: string; qty: number; reason: PurchaseReason; priority: PurchasePriority; comment: string }) => void;
   createPurchaseFromRequirement: (requirementId: string) => void;
   updatePurchaseProcurementMeta: (purchaseId: string, patch: Partial<PurchaseOrder>) => void;
@@ -16599,7 +16738,42 @@ function PurchasesPage({
   const canChangePurchaseStatus = canDo('purchases.status');
   const canReceiveStock = canDo('stock.receive');
   const [expandedProductId, setExpandedProductId] = useState('');
+  const [expandedPurchaseId, setExpandedPurchaseId] = useState('');
+  const [isCreatePurchaseOpen, setIsCreatePurchaseOpen] = useState(false);
+  const [purchaseSupplier, setPurchaseSupplier] = useState('');
+  const [purchaseDocumentNumber, setPurchaseDocumentNumber] = useState('');
+  const [purchaseDate, setPurchaseDate] = useState(today);
+  const [purchasePaymentType, setPurchasePaymentType] = useState<'bank' | 'cash' | 'card' | 'other'>('bank');
+  const [purchaseComment, setPurchaseComment] = useState('');
+  const [purchaseItems, setPurchaseItems] = useState<Array<{ productId: string; qty: string; price: string; salePrice: string; shelfLocation: string; warranty: string; comment: string }>>([
+    { productId: products[0]?.id ?? '', qty: '1', price: '', salePrice: '', shelfLocation: '', warranty: '', comment: '' },
+  ]);
   const openRequirements = requirements.filter((item) => ['Потрібно', 'До закупівлі', 'Замовлено', 'В дорозі'].includes(item.status));
+  const sortedPurchases = [...purchases].sort((a, b) => (parseDateTime(b.purchaseDate ?? b.orderedAt)?.getTime() ?? 0) - (parseDateTime(a.purchaseDate ?? a.orderedAt)?.getTime() ?? 0));
+  const purchaseTotals = sortedPurchases.reduce((sum, purchase) => sum + purchase.items.reduce((inner, item) => inner + item.qty * item.price, 0), 0);
+  const topPurchasedProducts = Array.from(
+    sortedPurchases.flatMap((purchase) => purchase.items).reduce((map, item) => {
+      map.set(item.productId, (map.get(item.productId) ?? 0) + item.qty);
+      return map;
+    }, new Map<string, number>()),
+  )
+    .map(([productId, qty]) => ({ productId, qty }))
+    .sort((a, b) => b.qty - a.qty)
+    .slice(0, 5);
+  const slowMovingProducts = products
+    .filter((product) => available(product) > 0)
+    .map((product) => ({
+      product,
+      age: oldestBatchAge(product),
+    }))
+    .filter((item) => item.age >= 30)
+    .sort((a, b) => b.age - a.age)
+    .slice(0, 5);
+  const averageMarkup = (() => {
+    const rows = sortedPurchases.flatMap((purchase) => purchase.items).filter((item) => item.price > 0 && (item.salePrice ?? 0) > 0);
+    if (rows.length === 0) return 0;
+    return rows.reduce((sum, item) => sum + (((item.salePrice ?? 0) - item.price) / item.price) * 100, 0) / rows.length;
+  })();
   const shortageRows = products
     .filter((product) => available(product) < Math.max(product.min, 1))
     .map((product) => {
@@ -16619,7 +16793,95 @@ function PurchasesPage({
 
   return (
     <div className="page-grid">
-      <PageTitle eyebrow="Закупівлі" title="Закупка" text="Швидкий відгук на нестачу товару." />
+      <PageTitle eyebrow="Закупівлі" title="Закупівлі / Прихід товару" text="Закупка, прихід партій, FIFO і аналітика по постачанню." />
+      <section className="executive-kpis finance-center-kpis">
+        <article className="executive-kpi-card"><span>Сума закупівель</span><strong>{money(purchaseTotals)}</strong></article>
+        <article className="executive-kpi-card"><span>Кількість закупівель</span><strong>{String(sortedPurchases.length)}</strong></article>
+        <article className="executive-kpi-card"><span>Середня націнка</span><strong>{`${Math.round(averageMarkup)}%`}</strong></article>
+        <article className="executive-kpi-card"><span>Потребують докупки</span><strong>{String(shortageRows.length)}</strong></article>
+      </section>
+      <section className="panel manager-orders-toolbar">
+        <div className="panel-heading">
+          <h2>Закупівлі</h2>
+          <span>{sortedPurchases.length}</span>
+        </div>
+        <div className="manager-order-inline-actions">
+          {canCreatePurchase && <button type="button" className="submit-button" onClick={() => setIsCreatePurchaseOpen(true)}>+ Нова закупівля</button>}
+        </div>
+      </section>
+      <section className="panel">
+        <div className="table stock-table purchase-table-products">
+          <div className="table-row table-head">
+            <span>Постачальник</span>
+            <span>Дата</span>
+            <span>Документ</span>
+            <span>Сума</span>
+            <span>Статус</span>
+            <span>Позиції</span>
+            <span>Хто оформив</span>
+          </div>
+          {sortedPurchases.map((purchase) => {
+            const total = purchase.items.reduce((sum, item) => sum + item.qty * item.price, 0);
+            const isExpanded = expandedPurchaseId === purchase.id;
+            return (
+              <React.Fragment key={purchase.id}>
+                <button type="button" className="table-row stock-product-row stock-product-row-warning" onClick={() => setExpandedPurchaseId((current) => current === purchase.id ? '' : purchase.id)}>
+                  <span>{purchase.supplier}</span>
+                  <span>{purchase.purchaseDate ?? purchase.orderedAt}</span>
+                  <span>{purchase.documentNumber || purchase.id}</span>
+                  <span>{money(total)}</span>
+                  <span><span className={purchase.status === 'Отримано' ? 'tag tag-teal' : purchase.status === 'В дорозі' ? 'tag tag-blue' : 'tag tag-yellow'}>{purchase.status}</span></span>
+                  <span>{purchase.items.length}</span>
+                  <span>{purchase.requestedBy || '—'}</span>
+                </button>
+                {isExpanded && (
+                  <div className="stock-product-detail">
+                    <div className="table purchase-detail-form">
+                      <label>Постачальник<input value={purchase.supplier} onChange={(event) => updatePurchaseProcurementMeta(purchase.id, { supplier: event.target.value })} readOnly={!canEditPurchase} /></label>
+                      <label>Документ<input value={purchase.documentNumber ?? ''} onChange={(event) => updatePurchaseProcurementMeta(purchase.id, { documentNumber: event.target.value })} readOnly={!canEditPurchase} /></label>
+                      <label>Дата<input type="date" value={purchase.purchaseDate ?? ''} onChange={(event) => updatePurchaseProcurementMeta(purchase.id, { purchaseDate: event.target.value })} readOnly={!canEditPurchase} /></label>
+                      <label>Оплата<select value={purchase.paymentType ?? 'bank'} onChange={(event) => updatePurchaseProcurementMeta(purchase.id, { paymentType: event.target.value as 'bank' | 'cash' | 'card' | 'other' })} disabled={!canEditPurchase}><option value="bank">Безготівка</option><option value="cash">Готівка</option><option value="card">Картка</option><option value="other">Інше</option></select></label>
+                      <label>Коментар<input value={purchase.comment ?? ''} onChange={(event) => updatePurchaseProcurementMeta(purchase.id, { comment: event.target.value })} readOnly={!canEditPurchase} /></label>
+                    </div>
+                    <div className="table stock-detail-table">
+                      <div className="table-row table-head">
+                        <span>Товар</span>
+                        <span>Категорія</span>
+                        <span>К-сть</span>
+                        <span>Закупка</span>
+                        <span>Продаж</span>
+                        <span>Комірка</span>
+                        <span>Гарантія</span>
+                        <span>Коментар</span>
+                      </div>
+                      {purchase.items.map((item, index) => (
+                        <div className="table-row" key={`${purchase.id}-${item.productId}-${index}`}>
+                          <span>{item.productName || productName(item.productId)}</span>
+                          <span>{item.category || products.find((product) => product.id === item.productId)?.category || '—'}</span>
+                          <span>{item.qty}</span>
+                          <span>{money(item.price)}</span>
+                          <span>{money(item.salePrice ?? products.find((product) => product.id === item.productId)?.price ?? 0)}</span>
+                          <span>{item.shelfLocation || products.find((product) => product.id === item.productId)?.storageLocation || '—'}</span>
+                          <span>{item.warranty || '—'}</span>
+                          <span>{item.comment || '—'}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="action-row">
+                      {canChangePurchaseStatus && <button type="button" onClick={() => updatePurchaseProcurementMeta(purchase.id, { status: 'Нова' })}>Нова</button>}
+                      {canChangePurchaseStatus && <button type="button" onClick={() => updatePurchaseProcurementMeta(purchase.id, { status: 'Замовлено' })}>Замовлено</button>}
+                      {canChangePurchaseStatus && <button type="button" onClick={() => updatePurchaseProcurementMeta(purchase.id, { status: 'В дорозі' })}>В дорозі</button>}
+                      {canReceiveStock && <button type="button" className="submit-button" onClick={() => receivePurchase(purchase.id)} disabled={!purchase.items.every((item) => item.price > 0)}>Підтвердити прихід</button>}
+                      <button type="button" onClick={() => printDocument('Прихідна накладна', 'purchase_order', purchase.id, purchase.supplier || 'Постачальник')}>Прихідна</button>
+                    </div>
+                  </div>
+                )}
+              </React.Fragment>
+            );
+          })}
+          {sortedPurchases.length === 0 && <div className="empty-state">Закупівель ще немає.</div>}
+        </div>
+      </section>
       <section className="panel">
         <div className="panel-heading"><h2>Потреба в закупці</h2><span>{shortageRows.length}</span></div>
         <div className="table stock-table purchase-table-products">
@@ -16737,6 +16999,121 @@ function PurchasesPage({
           {shortageRows.length === 0 && <div className="empty-state">Усі позиції в нормі.</div>}
         </div>
       </section>
+      <section className="executive-grid finance-center-bottom-grid">
+        <section className="panel executive-panel">
+          <div className="panel-heading"><h2>Найзакуповуваніші позиції</h2><span>top 5</span></div>
+          <div className="executive-list">
+            {topPurchasedProducts.map((row) => (
+              <div key={row.productId} className="executive-list-row">
+                <span>{productName(row.productId)}</span>
+                <strong>{row.qty}</strong>
+              </div>
+            ))}
+            {topPurchasedProducts.length === 0 && <div className="empty-state">Ще немає даних.</div>}
+          </div>
+        </section>
+        <section className="panel executive-panel">
+          <div className="panel-heading"><h2>Завислий товар</h2><span>30+ днів</span></div>
+          <div className="executive-list">
+            {slowMovingProducts.map((row) => (
+              <div key={row.product.id} className="executive-list-row">
+                <span>{row.product.name}</span>
+                <strong>{row.age} дн.</strong>
+              </div>
+            ))}
+            {slowMovingProducts.length === 0 && <div className="empty-state">Завислого товару немає.</div>}
+          </div>
+        </section>
+      </section>
+      {isCreatePurchaseOpen && (
+        <div className="manager-order-modal-backdrop" onClick={() => setIsCreatePurchaseOpen(false)}>
+          <section className="panel manager-order-focus manager-order-modal clients-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="panel-heading">
+              <h2>Нова закупівля</h2>
+              <button type="button" onClick={() => setIsCreatePurchaseOpen(false)}>Закрити</button>
+            </div>
+            <div className="manager-order-payment-grid">
+              <label>Постачальник<input value={purchaseSupplier} onChange={(event) => setPurchaseSupplier(event.target.value)} /></label>
+              <label>Документ / накладна<input value={purchaseDocumentNumber} onChange={(event) => setPurchaseDocumentNumber(event.target.value)} /></label>
+              <label>Дата<input type="date" value={purchaseDate} onChange={(event) => setPurchaseDate(event.target.value)} /></label>
+              <label>Спосіб оплати<select value={purchasePaymentType} onChange={(event) => setPurchasePaymentType(event.target.value as 'bank' | 'cash' | 'card' | 'other')}><option value="bank">Безготівка</option><option value="cash">Готівка</option><option value="card">Картка</option><option value="other">Інше</option></select></label>
+              <label className="clients-modal-comment">Коментар<textarea value={purchaseComment} onChange={(event) => setPurchaseComment(event.target.value)} rows={3} /></label>
+            </div>
+            <div className="table stock-detail-table">
+              <div className="table-row table-head">
+                <span>Товар</span>
+                <span>К-сть</span>
+                <span>Закупка</span>
+                <span>Продаж</span>
+                <span>Комірка</span>
+                <span>Гарантія</span>
+                <span>Коментар</span>
+              </div>
+              {purchaseItems.map((item, index) => {
+                const product = products.find((entry) => entry.id === item.productId);
+                return (
+                  <div key={`draft-purchase-item-${index}`} className="table-row">
+                    <span>
+                      <select value={item.productId} onChange={(event) => setPurchaseItems((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, productId: event.target.value } : row))}>
+                        {products.map((productOption) => <option key={productOption.id} value={productOption.id}>{productOption.name}</option>)}
+                      </select>
+                    </span>
+                    <span><input type="number" min={1} value={item.qty} onChange={(event) => setPurchaseItems((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, qty: event.target.value } : row))} /></span>
+                    <span><input type="number" min={1} value={item.price} onChange={(event) => setPurchaseItems((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, price: event.target.value } : row))} /></span>
+                    <span><input type="number" min={0} value={item.salePrice} placeholder={String(product?.price ?? '')} onChange={(event) => setPurchaseItems((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, salePrice: event.target.value } : row))} /></span>
+                    <span><input value={item.shelfLocation} placeholder={product?.storageLocation ?? ''} onChange={(event) => setPurchaseItems((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, shelfLocation: event.target.value } : row))} /></span>
+                    <span><input value={item.warranty} onChange={(event) => setPurchaseItems((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, warranty: event.target.value } : row))} /></span>
+                    <span><input value={item.comment} onChange={(event) => setPurchaseItems((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, comment: event.target.value } : row))} /></span>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="manager-order-inline-actions">
+              <button type="button" onClick={() => setPurchaseItems((current) => [...current, { productId: products[0]?.id ?? '', qty: '1', price: '', salePrice: '', shelfLocation: '', warranty: '', comment: '' }])}>Додати позицію</button>
+              <button type="button" onClick={() => setIsCreatePurchaseOpen(false)}>Скасувати</button>
+              <button
+                type="button"
+                className="submit-button"
+                onClick={() => {
+                  const saved = createPurchaseOrder({
+                    supplier: purchaseSupplier,
+                    documentNumber: purchaseDocumentNumber,
+                    purchaseDate,
+                    paymentType: purchasePaymentType,
+                    comment: purchaseComment,
+                    items: purchaseItems.map((item) => {
+                      const product = products.find((entry) => entry.id === item.productId);
+                      return {
+                        productId: item.productId,
+                        productName: product?.name,
+                        category: product?.category,
+                        qty: Number(item.qty) || 0,
+                        price: Number(item.price) || 0,
+                        salePrice: Number(item.salePrice) || product?.price || 0,
+                        shelfLocation: item.shelfLocation || product?.storageLocation,
+                        warranty: item.warranty || undefined,
+                        comment: item.comment || undefined,
+                        received: 0,
+                      };
+                    }),
+                  });
+                  if (saved) {
+                    setIsCreatePurchaseOpen(false);
+                    setPurchaseSupplier('');
+                    setPurchaseDocumentNumber('');
+                    setPurchaseDate(today);
+                    setPurchasePaymentType('bank');
+                    setPurchaseComment('');
+                    setPurchaseItems([{ productId: products[0]?.id ?? '', qty: '1', price: '', salePrice: '', shelfLocation: '', warranty: '', comment: '' }]);
+                  }
+                }}
+              >
+                Зберегти закупівлю
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   );
 }
