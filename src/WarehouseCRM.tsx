@@ -71,9 +71,19 @@ type OrderPartStatus =
   | 'Повернення';
 type RequirementStatus = 'Потрібно' | 'До закупівлі' | 'Замовлено' | 'В дорозі' | 'Прибуло';
 type PurchaseStatus = 'Створено' | 'Нова' | 'В роботі' | 'Замовлено' | 'В дорозі' | 'Прибуло' | 'Отримано' | 'Частково прибуло';
-type MovementType = 'Прихід' | 'Резерв' | 'Зняття резерву' | 'Видача інженеру' | 'Встановлення' | 'Списання' | 'Продаж' | 'Повернення' | 'Коригування';
+type MovementType = 'Прихід' | 'Резерв' | 'Зняття резерву' | 'Видача інженеру' | 'Встановлення' | 'Списання' | 'Продаж' | 'Повернення' | 'Коригування' | 'Переміщення';
 type PurchaseReason = 'Мінімум' | 'Під замовлення' | 'Вручну';
 type PurchasePriority = 'Низький' | 'Середній' | 'Високий';
+type WarehouseKind = 'main' | 'service' | 'cartridge' | 'uav' | 'consumables' | 'mobile' | 'defect' | 'returns';
+
+type WarehouseRecord = {
+  id: string;
+  name: string;
+  kind: WarehouseKind;
+  address?: string;
+  description?: string;
+  isActive: boolean;
+};
 
 type ProductBatch = {
   id: string;
@@ -87,6 +97,11 @@ type ProductBatch = {
   source: string;
   supplier?: string;
   documentNo?: string;
+  warehouseId?: string;
+  zone?: string;
+  row?: string;
+  shelf?: string;
+  cell?: string;
   shelfLocation?: string;
   comment?: string;
 };
@@ -448,13 +463,20 @@ type StockMovement = {
   orderId?: string;
   purchaseId?: string;
   actor?: string;
+  actorUserId?: string;
+  engineerId?: string;
   supplier?: string;
   documentNumber?: string;
   basis?: string;
+  batchId?: string;
   batchAllocations?: BatchAllocation[];
   batchRefs?: string;
   unitPrice?: number;
   totalAmount?: number;
+  fromWarehouseId?: string;
+  toWarehouseId?: string;
+  fromLocation?: string;
+  toLocation?: string;
   comment: string;
 };
 
@@ -910,6 +932,7 @@ type Permission =
   | 'stock.reserve'
   | 'stock.unreserve'
   | 'stock.writeoff'
+  | 'stock.transfer'
   | 'stock.inventory'
   | 'stock.adjust'
   | 'purchases.view'
@@ -1027,6 +1050,7 @@ type BackupPayload = {
   users: User[];
   clients: ClientRecord[];
   suppliers?: SupplierRecord[];
+  warehouses?: WarehouseRecord[];
   products: Product[];
   orders: ServiceOrder[];
   payments: SimpleOrderPaymentRecord[];
@@ -2114,6 +2138,7 @@ const defaultEngineerPieceRates: EngineerPieceRate[] = [
 const EMPLOYEES_STORAGE_KEY = 'crm_employees';
 const CLIENTS_STORAGE_KEY = 'crm_clients';
 const SUPPLIERS_STORAGE_KEY = 'crm_suppliers';
+const WAREHOUSES_STORAGE_KEY = 'crm_warehouses';
 const PRODUCTS_STORAGE_KEY = 'crm_products';
 const ORDERS_STORAGE_KEY = 'crm_orders';
 const PAYMENTS_STORAGE_KEY = 'crm_payments';
@@ -2131,6 +2156,18 @@ const ACTION_LOGS_STORAGE_KEY = 'crm_action_logs';
 const BACKUPS_STORAGE_KEY = 'crm_backups';
 const CASH_SHIFT_STORAGE_KEY = 'crm_cash_shift';
 const MAX_ACTION_LOGS = 100;
+const DEFAULT_WAREHOUSE_ID = 'WH-MAIN';
+
+const defaultWarehouses: WarehouseRecord[] = [
+  { id: DEFAULT_WAREHOUSE_ID, name: 'Основний склад', kind: 'main', address: 'Головний склад', description: 'Базовий склад CRM для стартових залишків.', isActive: true },
+  { id: 'WH-SERVICE', name: 'Сервісний склад', kind: 'service', description: 'Товар для ремонтів і сервісних замовлень.', isActive: true },
+  { id: 'WH-CARTRIDGE', name: 'Склад картриджів', kind: 'cartridge', description: 'Картриджі та комплектуючі до них.', isActive: true },
+  { id: 'WH-UAV', name: 'Склад БПЛА', kind: 'uav', description: 'Запчастини та вузли для БПЛА.', isActive: true },
+  { id: 'WH-CONSUMABLES', name: 'Склад витратників', kind: 'consumables', description: 'Витратні матеріали та дрібні комплектуючі.', isActive: true },
+  { id: 'WH-MOBILE', name: 'Мобільний склад', kind: 'mobile', description: 'Товар у виїзді або в автомобілі.', isActive: true },
+  { id: 'WH-DEFECT', name: 'Склад браку', kind: 'defect', description: 'Браковані та списані позиції.', isActive: true },
+  { id: 'WH-RETURNS', name: 'Склад повернень', kind: 'returns', description: 'Повернення від клієнтів і з сервісу.', isActive: true },
+];
 
 function loadEmployeesFromStorage(): User[] {
   try {
@@ -2239,6 +2276,33 @@ function loadSuppliersFromStorage(): SupplierRecord[] {
 
 function saveSuppliersToStorage(suppliers: SupplierRecord[]) {
   localStorage.setItem(SUPPLIERS_STORAGE_KEY, JSON.stringify(suppliers.map((item) => normalizeStoredSupplier(item))));
+}
+
+function normalizeWarehouseRecord(warehouse: Partial<WarehouseRecord>): WarehouseRecord {
+  return {
+    id: String(warehouse.id ?? uid('WH')),
+    name: String(warehouse.name ?? 'Склад').trim() || 'Склад',
+    kind: warehouse.kind ?? 'main',
+    address: warehouse.address ? String(warehouse.address).trim() : undefined,
+    description: warehouse.description ? String(warehouse.description).trim() : undefined,
+    isActive: warehouse.isActive !== false,
+  };
+}
+
+function loadWarehousesFromStorage(): WarehouseRecord[] {
+  try {
+    const raw = localStorage.getItem(WAREHOUSES_STORAGE_KEY);
+    if (!raw) return defaultWarehouses.map((item) => normalizeWarehouseRecord(item));
+    const parsed = JSON.parse(raw);
+    const stored = Array.isArray(parsed) ? parsed.map((item) => normalizeWarehouseRecord(item as WarehouseRecord)) : [];
+    return mergeSeededById(stored, defaultWarehouses.map((item) => normalizeWarehouseRecord(item)));
+  } catch {
+    return defaultWarehouses.map((item) => normalizeWarehouseRecord(item));
+  }
+}
+
+function saveWarehousesToStorage(warehouses: WarehouseRecord[]) {
+  localStorage.setItem(WAREHOUSES_STORAGE_KEY, JSON.stringify(warehouses.map((item) => normalizeWarehouseRecord(item))));
 }
 
 function loadProductsFromStorage(): Product[] {
@@ -2624,7 +2688,17 @@ function loadMovementsFromStorage() {
     const raw = localStorage.getItem(MOVEMENTS_STORAGE_KEY);
     if (!raw) return [] as StockMovement[];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed as StockMovement[] : [];
+    return Array.isArray(parsed) ? parsed.map((item) => ({
+      ...(item as StockMovement),
+      actor: String(item.actor ?? ''),
+      actorUserId: typeof item.actorUserId === 'string' ? item.actorUserId : undefined,
+      engineerId: typeof item.engineerId === 'string' ? item.engineerId : undefined,
+      batchId: typeof item.batchId === 'string' ? item.batchId : undefined,
+      fromWarehouseId: typeof item.fromWarehouseId === 'string' ? item.fromWarehouseId : undefined,
+      toWarehouseId: typeof item.toWarehouseId === 'string' ? item.toWarehouseId : undefined,
+      fromLocation: typeof item.fromLocation === 'string' ? item.fromLocation : undefined,
+      toLocation: typeof item.toLocation === 'string' ? item.toLocation : undefined,
+    } satisfies StockMovement)) : [];
   } catch {
     return [] as StockMovement[];
   }
@@ -2797,7 +2871,7 @@ const roleFinePermissions: Record<Role, Permission[]> = {
     'clients.view',
     'repairs.view',
     'sales.view',
-    'stock.view',
+    'stock.view', 'stock.transfer',
     'purchases.view',
     'finance.cash', 'finance.reports',
     'reports.view', 'reports.export', 'reports.profit', 'reports.staff',
@@ -2807,7 +2881,7 @@ const roleFinePermissions: Record<Role, Permission[]> = {
     'clients.view',
     'repairs.view',
     'sales.view',
-    'stock.view',
+    'stock.view', 'stock.transfer',
     'purchases.view',
     'finance.cash', 'finance.reports',
     'reports.view', 'reports.export', 'reports.profit', 'reports.staff',
@@ -2817,7 +2891,7 @@ const roleFinePermissions: Record<Role, Permission[]> = {
     'clients.view', 'clients.create', 'clients.edit',
     'repairs.view', 'repairs.create', 'repairs.edit', 'repairs.status', 'repairs.close', 'repairs.cancel',
     'sales.view', 'sales.create', 'sales.edit', 'sales.post', 'sales.cancel', 'sales.return',
-    'stock.view', 'stock.receive', 'stock.reserve', 'stock.unreserve', 'stock.writeoff', 'stock.inventory', 'stock.adjust',
+    'stock.view', 'stock.receive', 'stock.reserve', 'stock.unreserve', 'stock.writeoff', 'stock.transfer', 'stock.inventory', 'stock.adjust',
     'purchases.view', 'purchases.create', 'purchases.edit', 'purchases.send', 'purchases.status', 'purchases.close',
     'finance.cash', 'finance.payments', 'finance.reports', 'finance.refund', 'finance.adjust',
     'reports.view', 'reports.export', 'reports.profit', 'reports.staff',
@@ -2834,12 +2908,12 @@ const roleFinePermissions: Record<Role, Permission[]> = {
     'repairs.view', 'repairs.edit', 'repairs.status',
   ],
   Склад: [
-    'stock.view', 'stock.receive', 'stock.reserve', 'stock.unreserve', 'stock.writeoff', 'stock.inventory', 'stock.adjust',
+    'stock.view', 'stock.receive', 'stock.reserve', 'stock.unreserve', 'stock.writeoff', 'stock.transfer', 'stock.inventory', 'stock.adjust',
     'purchases.view', 'purchases.create', 'purchases.edit', 'purchases.send', 'purchases.status',
     'sales.view',
   ],
   Комірник: [
-    'stock.view', 'stock.receive', 'stock.reserve', 'stock.unreserve', 'stock.writeoff', 'stock.inventory', 'stock.adjust',
+    'stock.view', 'stock.receive', 'stock.reserve', 'stock.unreserve', 'stock.writeoff', 'stock.transfer', 'stock.inventory', 'stock.adjust',
     'purchases.view', 'purchases.create', 'purchases.edit', 'purchases.send', 'purchases.status',
     'sales.view',
   ],
@@ -2854,7 +2928,7 @@ const roleFinePermissions: Record<Role, Permission[]> = {
     'cost.view', 'profit.view',
   ],
   Закупник: [
-    'stock.view',
+    'stock.view', 'stock.transfer',
     'purchases.view', 'purchases.create', 'purchases.edit', 'purchases.send', 'purchases.status', 'purchases.close',
     'reports.view',
     'cost.view',
@@ -3150,6 +3224,11 @@ function normalizeStoredProduct(product: Product): Product {
         supplier: batch.supplier ?? batch.source,
         salePrice: batch.salePrice ?? product.price ?? 0,
         documentNo: batch.documentNo ?? '',
+        warehouseId: batch.warehouseId ?? DEFAULT_WAREHOUSE_ID,
+        zone: batch.zone ?? '',
+        row: batch.row ?? '',
+        shelf: batch.shelf ?? '',
+        cell: batch.cell ?? '',
         shelfLocation: batch.shelfLocation ?? product.storageLocation ?? '',
       }))
     : (Number(product.stock) > 0 ? [{
@@ -3164,6 +3243,11 @@ function normalizeStoredProduct(product: Product): Product {
         source: 'Початковий залишок',
         supplier: 'Початковий залишок',
         documentNo: 'INIT',
+        warehouseId: DEFAULT_WAREHOUSE_ID,
+        zone: '',
+        row: '',
+        shelf: '',
+        cell: '',
         shelfLocation: product.storageLocation ?? '',
         comment: 'Початковий залишок перенесено в стартову партію.',
       }] : []);
@@ -3185,6 +3269,16 @@ function normalizeStoredProduct(product: Product): Product {
 
 function findProductByLookup(products: Product[], query: string) {
   return products.find((product) => productMatchesLookup(product, query));
+}
+
+function batchLocationLabel(batch: Pick<ProductBatch, 'zone' | 'row' | 'shelf' | 'cell' | 'shelfLocation'>) {
+  const detailed = [batch.zone, batch.row, batch.shelf, batch.cell].filter(Boolean).join('-');
+  return detailed || batch.shelfLocation || 'Без комірки';
+}
+
+function warehouseNameById(warehouses: WarehouseRecord[], warehouseId?: string) {
+  if (!warehouseId) return 'Основний склад';
+  return warehouses.find((item) => item.id === warehouseId)?.name ?? warehouseId;
 }
 
 function findSimilarProducts(products: Product[], input: { name?: string; sku?: string; barcode?: string; brand?: string; model?: string }) {
@@ -4941,6 +5035,7 @@ useEffect(() => {
   })));
   const [customerList, setCustomerList] = useState<ClientRecord[]>(() => loadClientsFromStorage());
   const [suppliers, setSuppliers] = useState<SupplierRecord[]>(() => loadSuppliersFromStorage());
+  const [warehouses, setWarehouses] = useState<WarehouseRecord[]>(() => loadWarehousesFromStorage());
   const [contracts, setContracts] = useState<ContractRecord[]>(() => loadContractsFromStorage());
   const [contractActs, setContractActs] = useState<ContractActRecord[]>(() => loadContractActsFromStorage());
   const [bankImportItems, setBankImportItems] = useState<BankImportItem[]>(() => loadBankImportItemsFromStorage());
@@ -5213,6 +5308,10 @@ useEffect(() => {
   useEffect(() => {
     saveSuppliersToStorage(suppliers);
   }, [suppliers]);
+
+  useEffect(() => {
+    saveWarehousesToStorage(warehouses);
+  }, [warehouses]);
 
   useEffect(() => {
     saveProductsToStorage(products);
@@ -5822,7 +5921,108 @@ useEffect(() => {
   }
 
   function addMovement(movement: Omit<StockMovement, 'id' | 'date'>) {
-    setMovements((current) => [{ id: uid('MOV'), date: today, actor: movement.actor ?? activeUser.name, ...movement }, ...current]);
+    setMovements((current) => [{
+      id: uid('MOV'),
+      date: today,
+      actor: movement.actor ?? activeUser.name,
+      actorUserId: movement.actorUserId ?? activeUser.id,
+      ...movement,
+    }, ...current]);
+  }
+
+  function transferStockBetweenLocations(input: {
+    productId: string;
+    batchId: string;
+    qty: number;
+    toWarehouseId: string;
+    toLocation: string;
+    reason: string;
+  }) {
+    if (!canDo('stock.transfer') && activeUser.role !== 'Адміністратор' && !isDirectorRole(activeUser.role)) {
+      setNotice('У вашої ролі немає права переміщати товар між складами.');
+      return false;
+    }
+    const qty = Math.max(0, Math.floor(input.qty));
+    if (qty <= 0) {
+      setNotice('Вкажіть коректну кількість для переміщення.');
+      return false;
+    }
+    const product = products.find((item) => item.id === input.productId);
+    if (!product) {
+      setNotice('Товар для переміщення не знайдено.');
+      return false;
+    }
+    const sourceBatch = product.batches.find((item) => item.id === input.batchId);
+    if (!sourceBatch) {
+      setNotice('Партію для переміщення не знайдено.');
+      return false;
+    }
+    if (sourceBatch.qtyAvailable < qty) {
+      setNotice('Недостатньо вільного залишку в партії для переміщення.');
+      return false;
+    }
+    const fromLocation = batchLocationLabel(sourceBatch);
+    const toLocation = input.toLocation.trim() || 'Без комірки';
+    if ((sourceBatch.warehouseId ?? DEFAULT_WAREHOUSE_ID) === input.toWarehouseId && fromLocation === toLocation) {
+      setNotice('Товар уже знаходиться на цій самій локації.');
+      return false;
+    }
+    const nextProducts = products.map((item) => {
+      if (item.id !== input.productId) return item;
+      const nextBatches: ProductBatch[] = [];
+      item.batches.forEach((batch) => {
+        if (batch.id !== input.batchId) {
+          nextBatches.push(batch);
+          return;
+        }
+        const movedQty = Math.min(qty, batch.qtyAvailable);
+        const remainingQtyAvailable = batch.qtyAvailable - movedQty;
+        const remainingQtyTotal = batch.qtyTotal - movedQty;
+        if (remainingQtyTotal > 0 || remainingQtyAvailable > 0) {
+          nextBatches.push({
+            ...batch,
+            qtyTotal: Math.max(remainingQtyTotal, 0),
+            qtyAvailable: Math.max(remainingQtyAvailable, 0),
+          });
+        }
+        nextBatches.push({
+          ...batch,
+          id: uid('BAT-MOVE'),
+          qtyTotal: movedQty,
+          qtyAvailable: movedQty,
+          warehouseId: input.toWarehouseId,
+          shelfLocation: toLocation,
+          zone: '',
+          row: '',
+          shelf: '',
+          cell: '',
+          comment: [batch.comment, `Переміщено ${today}`].filter(Boolean).join(' · '),
+        });
+      });
+      return normalizeStoredProduct({ ...item, batches: nextBatches });
+    });
+    setProducts(nextProducts);
+    addMovement({
+      type: 'Переміщення',
+      productId: input.productId,
+      qty,
+      batchId: input.batchId,
+      batchRefs: `${input.batchId} -> ${input.toWarehouseId}`,
+      unitPrice: sourceBatch.purchasePrice,
+      totalAmount: sourceBatch.purchasePrice * qty,
+      fromWarehouseId: sourceBatch.warehouseId ?? DEFAULT_WAREHOUSE_ID,
+      toWarehouseId: input.toWarehouseId,
+      fromLocation,
+      toLocation,
+      comment: input.reason.trim() || 'Внутрішнє переміщення між складами/ячейками.',
+    });
+    logAction(
+      'Переміщення товару',
+      input.productId,
+      `${product.name}: ${qty} шт. ${warehouseNameById(warehouses, sourceBatch.warehouseId ?? DEFAULT_WAREHOUSE_ID)} / ${fromLocation} -> ${warehouseNameById(warehouses, input.toWarehouseId)} / ${toLocation}.`,
+    );
+    setNotice(`Переміщення виконано: ${product.name} · ${qty} шт. → ${warehouseNameById(warehouses, input.toWarehouseId)} / ${toLocation}.`);
+    return true;
   }
 
   function prependActionLog(_entry: ActionLog) {
@@ -5855,6 +6055,7 @@ useEffect(() => {
       users,
       clients: customerList,
       suppliers,
+      warehouses,
       products,
       orders,
       payments: simplePayments,
@@ -5910,6 +6111,7 @@ useEffect(() => {
     saveEmployeesToStorage(payload.users);
     saveClientsToStorage(payload.clients);
     saveSuppliersToStorage(payload.suppliers ?? []);
+    saveWarehousesToStorage(payload.warehouses ?? defaultWarehouses);
     saveProductsToStorage(payload.products);
     saveOrdersToStorage(payload.orders);
     saveSimplePaymentsToStorage(payload.payments);
@@ -5928,6 +6130,7 @@ useEffect(() => {
     setUsers(payload.users);
     setCustomerList(payload.clients);
     setSuppliers((payload.suppliers ?? []).map(normalizeStoredSupplier));
+    setWarehouses((payload.warehouses ?? defaultWarehouses).map(normalizeWarehouseRecord));
     setProducts(payload.products);
     setOrders(payload.orders);
     setSimplePayments(payload.payments);
@@ -6393,7 +6596,7 @@ useEffect(() => {
       comment: `Автоматичний резерв під замовлення ${orderId}: ${reserved.allocations.map((item) => `${item.batchId} x${item.qty}`).join(', ')}.`,
     });
     logAction('Резерв в замовлення', orderId, `${targetProduct.name} · ${requestedQty} шт. · FIFO ${reserved.allocations.map((item) => `${item.batchId}/${item.qty}`).join(', ')}.`);
-    setNotice(`Деталь "${targetProduct.name}" додано до ${orderId}. Резерв створено автоматично.`);
+    setNotice(`Деталь "${targetProduct.name}" додано до ${orderId}. Резерв створено автоматично.${reserveWarehouseWarning(targetProduct, reserved.allocations)}`);
   }
 
   function removeSimpleManagerOrderPart(orderId: string, partId: string, reason?: string, comment?: string) {
@@ -8436,6 +8639,16 @@ useEffect(() => {
     };
   }
 
+  function reserveWarehouseWarning(product: Product, allocations?: BatchAllocation[]) {
+    const warehouseNames = Array.from(new Set((allocations ?? []).map((allocation) => {
+      const batch = product.batches.find((item) => item.id === allocation.batchId);
+      return warehouseNameById(warehouses, batch?.warehouseId ?? DEFAULT_WAREHOUSE_ID);
+    }))).filter(Boolean);
+    const nonMain = warehouseNames.filter((name) => name !== warehouseNameById(warehouses, DEFAULT_WAREHOUSE_ID));
+    if (nonMain.length === 0) return '';
+    return ` Увага: резерв лежить на іншому складі (${nonMain.join(', ')}).`;
+  }
+
   function writeOffInstalledPartsForOrder(order: ServiceOrder, comment: string) {
     let writtenOff = 0;
     const nextProducts = products.map((product) => ({ ...product, batches: product.batches.map((batch) => ({ ...batch })) }));
@@ -8575,6 +8788,7 @@ useEffect(() => {
             source: supplier,
             supplier,
             documentNo: purchaseDocumentNo,
+            warehouseId: DEFAULT_WAREHOUSE_ID,
             shelfLocation: storageLocation || product.storageLocation,
             comment: input.appendBarcodeToProductId ? `Додано штрих-код ${normalizedBarcode || 'без коду'} і нову партію.` : 'Прямий прихід на склад.',
           },
@@ -8616,6 +8830,7 @@ useEffect(() => {
             source: supplier,
             supplier,
             documentNo: purchaseDocumentNo,
+            warehouseId: DEFAULT_WAREHOUSE_ID,
             shelfLocation: storageLocation,
             comment: 'Нова позиція створена автоматично при приході.',
           },
@@ -8652,7 +8867,10 @@ useEffect(() => {
       type: 'Прихід',
       productId,
       qty,
+      batchId,
       purchaseId,
+      toWarehouseId: DEFAULT_WAREHOUSE_ID,
+      toLocation: storageLocation || 'Без комірки',
       basis: purchaseDocumentNo,
       batchAllocations: [{ batchId, qty, unitCost: purchasePrice, purchaseDate: today }],
       batchRefs: batchId,
@@ -9050,6 +9268,7 @@ useEffect(() => {
             source: purchase.supplier,
             supplier: purchase.supplier,
             documentNo: documentNumber,
+            warehouseId: DEFAULT_WAREHOUSE_ID,
             shelfLocation: item.shelfLocation?.trim() || product.storageLocation,
             comment: item.comment?.trim() || `Партія створена з закупки ${purchaseId}.`,
           },
@@ -9075,9 +9294,12 @@ useEffect(() => {
         type: 'Прихід',
         productId: item.productId,
         qty: qtyToReceive,
+        batchId,
         purchaseId,
         supplier: purchase.supplier,
         documentNumber,
+        toWarehouseId: DEFAULT_WAREHOUSE_ID,
+        toLocation: item.shelfLocation?.trim() || products.find((entry) => entry.id === item.productId)?.storageLocation || 'Без комірки',
         basis: documentNumber,
         batchAllocations: [{ batchId, qty: qtyToReceive, unitCost: item.price, purchaseDate: receiptDate }],
         batchRefs: `${batchId}:${qtyToReceive}`,
@@ -10357,7 +10579,15 @@ useEffect(() => {
       return { ...next, status: updateSaleStatus(next) };
     });
     logAction('Резерв продажу', sale.id, 'Товари зарезервовано під продаж.');
-    setNotice(`Товари зарезервовано під продаж ${sale.id}.`);
+    const saleWarehouseWarnings = Array.from(saleReservations.values())
+      .flatMap((reservation) => reservation.allocations.map((allocation) => {
+        const product = sale.items.find((item) => (saleReservations.get(item.id)?.allocations ?? []).some((line) => line.batchId === allocation.batchId));
+        const sourceProduct = product ? products.find((entry) => entry.id === product.productId) : undefined;
+        const batch = sourceProduct?.batches.find((entry) => entry.id === allocation.batchId);
+        return batch ? warehouseNameById(warehouses, batch.warehouseId ?? DEFAULT_WAREHOUSE_ID) : '';
+      }))
+      .filter((name) => name && name !== warehouseNameById(warehouses, DEFAULT_WAREHOUSE_ID));
+    setNotice(`Товари зарезервовано під продаж ${sale.id}.${saleWarehouseWarnings.length ? ` Увага: частина резерву знаходиться на інших складах (${Array.from(new Set(saleWarehouseWarnings)).join(', ')}).` : ''}`);
   }
 
   function acceptSalePayment(sale: Sale, amount: number, method: PaymentMethod, comment: string) {
@@ -11295,7 +11525,7 @@ useEffect(() => {
             oneClickManagerIssue={oneClickManagerIssue}
           />
         )}
-        {canViewPage(page) && page === 'parts' && <PartsPage products={products} requirements={requirements} receipts={receipts} movements={movements} orders={orders} sales={sales} productName={productName} showCost={canDo('cost.view')} receiveStockIntake={receiveStockIntake} canDo={canDo} onImportProducts={handleProductsImport} />}
+        {canViewPage(page) && page === 'parts' && <PartsPage products={products} requirements={requirements} receipts={receipts} movements={movements} warehouses={warehouses} orders={orders} sales={sales} productName={productName} showCost={canDo('cost.view')} receiveStockIntake={receiveStockIntake} canDo={canDo} onImportProducts={handleProductsImport} onTransferStock={transferStockBetweenLocations} />}
         {canViewPage(page) && page === 'purchases' && (
           <PurchasesPage
             purchases={purchases}
@@ -16958,7 +17188,7 @@ function SalesPage(props: {
   );
 }
 
-function PartsPage({ products, requirements, receipts, movements, orders, sales, productName, showCost, receiveStockIntake, canDo, onImportProducts }: { products: Product[]; requirements: PartRequirement[]; receipts: GoodsReceipt[]; movements: StockMovement[]; orders: ServiceOrder[]; sales: Sale[]; productName: (id: string) => string; showCost: boolean; receiveStockIntake: (input: StockIntakeInput) => void; canDo: (permission: Permission) => boolean; onImportProducts: (file: File) => Promise<void> }) {
+function PartsPage({ products, requirements, receipts, movements, warehouses, orders, sales, productName, showCost, receiveStockIntake, canDo, onImportProducts, onTransferStock }: { products: Product[]; requirements: PartRequirement[]; receipts: GoodsReceipt[]; movements: StockMovement[]; warehouses: WarehouseRecord[]; orders: ServiceOrder[]; sales: Sale[]; productName: (id: string) => string; showCost: boolean; receiveStockIntake: (input: StockIntakeInput) => void; canDo: (permission: Permission) => boolean; onImportProducts: (file: File) => Promise<void>; onTransferStock: (input: { productId: string; batchId: string; qty: number; toWarehouseId: string; toLocation: string; reason: string }) => boolean }) {
   const canReceiveStock = canDo('stock.receive');
   const [stockScanCode, setStockScanCode] = useState('');
   const [stockSearch, setStockSearch] = useState('');
@@ -16978,6 +17208,11 @@ function PartsPage({ products, requirements, receipts, movements, orders, sales,
   const [intakeMinStock, setIntakeMinStock] = useState('1');
   const [intakeLocation, setIntakeLocation] = useState('');
   const [intakeDocumentNo, setIntakeDocumentNo] = useState('');
+  const [transferBatchId, setTransferBatchId] = useState('');
+  const [transferQty, setTransferQty] = useState('1');
+  const [transferWarehouseId, setTransferWarehouseId] = useState(warehouses[0]?.id ?? DEFAULT_WAREHOUSE_ID);
+  const [transferLocation, setTransferLocation] = useState('');
+  const [transferReason, setTransferReason] = useState('');
   const [duplicatePayload, setDuplicatePayload] = useState<StockIntakeInput | null>(null);
   const [duplicateCandidates, setDuplicateCandidates] = useState<Product[]>([]);
   const importProductsInputRef = useRef<HTMLInputElement | null>(null);
@@ -17035,6 +17270,31 @@ function PartsPage({ products, requirements, receipts, movements, orders, sales,
     if (reserveDates.length === 0) return 0;
     return Math.round(reserveDates.reduce((sum, date) => sum + daysSince(date), 0) / reserveDates.length);
   })();
+  const warehouseAnalytics = warehouses.map((warehouse) => {
+    const warehouseBatches = products.flatMap((product) => product.batches.filter((batch) => (batch.warehouseId ?? DEFAULT_WAREHOUSE_ID) === warehouse.id));
+    const totalQty = warehouseBatches.reduce((sum, batch) => sum + batch.qtyAvailable, 0);
+    const reservedQty = products.reduce((sum, product) => {
+      const reserveRows = productReservationRows.get(product.id) ?? [];
+      const productReserved = reserveRows.reduce((inner, row) => inner + row.qty, 0);
+      const productWarehouseQty = warehouseBatches.filter((batch) => batch.productId === product.id).reduce((inner, batch) => inner + batch.qtyAvailable, 0);
+      if (productWarehouseQty <= 0 || product.stock <= 0) return sum;
+      return sum + Math.min(productReserved, productWarehouseQty);
+    }, 0);
+    const staleDays = warehouseBatches.length > 0 ? Math.max(...warehouseBatches.map((batch) => daysSince(batch.purchaseDate))) : 0;
+    const defectLoss = movements
+      .filter((movement) => movement.type === 'Списання' && movement.toWarehouseId === 'WH-DEFECT' && movement.fromWarehouseId === warehouse.id)
+      .reduce((sum, movement) => sum + (movement.totalAmount ?? 0), 0);
+    return {
+      warehouse,
+      totalQty,
+      reservedQty,
+      availableQty: Math.max(totalQty - reservedQty, 0),
+      staleDays,
+      moveCount: movements.filter((movement) => movement.type === 'Переміщення' && (movement.fromWarehouseId === warehouse.id || movement.toWarehouseId === warehouse.id)).length,
+      defectLoss,
+    };
+  }).filter((row) => row.totalQty > 0 || row.reservedQty > 0 || row.moveCount > 0);
+  const mostLoadedWarehouse = [...warehouseAnalytics].sort((a, b) => b.totalQty - a.totalQty)[0];
 
   function getStockTone(product: Product) {
     const free = available(product);
@@ -17133,6 +17393,23 @@ function PartsPage({ products, requirements, receipts, movements, orders, sales,
     } finally {
       event.target.value = '';
     }
+  }
+
+  function submitTransfer(product: Product) {
+    if (!transferBatchId) return;
+    const ok = onTransferStock({
+      productId: product.id,
+      batchId: transferBatchId,
+      qty: Number(transferQty),
+      toWarehouseId: transferWarehouseId,
+      toLocation: transferLocation,
+      reason: transferReason,
+    });
+    if (!ok) return;
+    setTransferBatchId('');
+    setTransferQty('1');
+    setTransferLocation('');
+    setTransferReason('');
   }
 
   return (
@@ -17270,8 +17547,30 @@ function PartsPage({ products, requirements, receipts, movements, orders, sales,
           <Metric icon={<Archive />} label="У резерві" value={`${products.reduce((sum, product) => sum + product.reserved, 0)} шт.`} hint="ще не списано фізично" />
           <Metric icon={<PackageCheck />} label="Дефіцитні позиції" value={`${reserveAnalyticsRows.filter((row) => row.availableQty <= 0).length}`} hint="товари без доступного залишку" />
           <Metric icon={<Clock3 />} label="Середній вік резерву" value={`${averageReserveAge} дн.`} hint="час до списання або зняття" />
-          <Metric icon={<TrendingUp />} label="Топ резервів" value={reserveAnalyticsRows[0] ? reserveAnalyticsRows[0].product.name : '—'} hint={reserveAnalyticsRows[0] ? `${reserveAnalyticsRows[0].reservedQty} шт.` : 'резервів немає'} />
+          <Metric icon={<TrendingUp />} label="Найзавантаженіший склад" value={mostLoadedWarehouse?.warehouse.name ?? '—'} hint={mostLoadedWarehouse ? `${mostLoadedWarehouse.totalQty} шт.` : 'немає руху'} />
         </section>
+        {warehouseAnalytics.length > 0 && (
+          <div className="table stock-detail-table" style={{ marginBottom: '16px' }}>
+            <div className="table-row table-head">
+              <span>Склад</span>
+              <span>Всього</span>
+              <span>Резерв</span>
+              <span>Доступно</span>
+              <span>Залежалий товар</span>
+              <span>Переміщення</span>
+            </div>
+            {warehouseAnalytics.map((row) => (
+              <div key={row.warehouse.id} className="table-row">
+                <span>{row.warehouse.name}</span>
+                <span>{row.totalQty}</span>
+                <span>{row.reservedQty}</span>
+                <span>{row.availableQty}</span>
+                <span>{row.staleDays > 0 ? `${row.staleDays} дн.` : '—'}</span>
+                <span>{row.moveCount}</span>
+              </div>
+            ))}
+          </div>
+        )}
         <div className="stock-table-search">
           <input
             value={stockSearch}
@@ -17294,6 +17593,17 @@ function PartsPage({ products, requirements, receipts, movements, orders, sales,
             const productReceipts = receipts.filter((receipt) => receipt.productId === product.id).slice(0, 5);
             const productMovements = movements.filter((movement) => movement.productId === product.id).slice(0, 8);
             const reserveRows = productReservationRows.get(product.id) ?? [];
+            const warehouseRows = Array.from(product.batches.reduce((map, batch) => {
+              const warehouseId = batch.warehouseId ?? DEFAULT_WAREHOUSE_ID;
+              const key = `${warehouseId}|${batchLocationLabel(batch)}`;
+              const current = map.get(key) ?? { warehouseId, location: batchLocationLabel(batch), total: 0, available: 0 };
+              current.total += batch.qtyTotal;
+              current.available += batch.qtyAvailable;
+              map.set(key, current);
+              return map;
+            }, new Map<string, { warehouseId: string; location: string; total: number; available: number }>()))
+              .map(([, value]) => value)
+              .sort((a, b) => a.warehouseId.localeCompare(b.warehouseId) || a.location.localeCompare(b.location, 'uk'));
             return (
               <React.Fragment key={product.id}>
                 <button
@@ -17323,6 +17633,25 @@ function PartsPage({ products, requirements, receipts, movements, orders, sales,
                     </div>
                     <div className="stock-product-detail-grid">
                       <div className="stock-product-detail-block">
+                        <strong>Склади та ячейки</strong>
+                        <div className="table stock-detail-table">
+                          <div className="table-row table-head">
+                            <span>Склад</span>
+                            <span>Ячейка</span>
+                            <span>Фізично</span>
+                            <span>Доступно</span>
+                          </div>
+                          {warehouseRows.length > 0 ? warehouseRows.map((row) => (
+                            <div key={`${row.warehouseId}-${row.location}`} className="table-row">
+                              <span>{warehouseNameById(warehouses, row.warehouseId)}</span>
+                              <span>{row.location}</span>
+                              <span>{row.total}</span>
+                              <span>{row.available}</span>
+                            </div>
+                          )) : <div className="empty-state">Локації ще не визначені.</div>}
+                        </div>
+                      </div>
+                      <div className="stock-product-detail-block">
                         <strong>Резерви по замовленнях</strong>
                         <div className="table stock-detail-table">
                           <div className="table-row table-head">
@@ -17347,6 +17676,7 @@ function PartsPage({ products, requirements, receipts, movements, orders, sales,
                         <strong>Партії FIFO</strong>
                         <div className="table stock-detail-table">
                           <div className="table-row table-head">
+                            <span>Склад</span>
                             <span>Дата</span>
                             <span>Постачальник</span>
                             <span>Залишок</span>
@@ -17358,12 +17688,13 @@ function PartsPage({ products, requirements, receipts, movements, orders, sales,
                           </div>
                           {product.batches.length > 0 ? product.batches.map((batch) => (
                             <div key={batch.id} className="table-row">
+                              <span>{warehouseNameById(warehouses, batch.warehouseId ?? DEFAULT_WAREHOUSE_ID)}</span>
                               <span>{batch.purchaseDate}</span>
                               <span>{batch.supplier || batch.source || '—'}</span>
                               <span>{batch.qtyAvailable}/{batch.qtyTotal}</span>
                               <span>{showCost ? money(batch.purchasePrice) : 'Приховано'}</span>
                               <span>{money(batch.salePrice ?? product.price ?? 0)}</span>
-                              <span>{batch.shelfLocation || product.storageLocation || '—'}</span>
+                              <span>{batchLocationLabel(batch)}</span>
                               <span>{batch.documentNo || '—'}</span>
                               <span>{batch.id}</span>
                             </div>
@@ -17396,6 +17727,8 @@ function PartsPage({ products, requirements, receipts, movements, orders, sales,
                         <div className="table-row table-head">
                           <span>Дата</span>
                           <span>Тип</span>
+                          <span>Звідки</span>
+                          <span>Куди</span>
                           <span>Кількість</span>
                           <span>Партія</span>
                           <span>Підстава</span>
@@ -17405,6 +17738,8 @@ function PartsPage({ products, requirements, receipts, movements, orders, sales,
                           <div key={movement.id} className="table-row">
                             <span>{movement.date}</span>
                             <span>{movement.type}</span>
+                            <span>{movement.fromWarehouseId ? `${warehouseNameById(warehouses, movement.fromWarehouseId)} / ${movement.fromLocation || '—'}` : '—'}</span>
+                            <span>{movement.toWarehouseId ? `${warehouseNameById(warehouses, movement.toWarehouseId)} / ${movement.toLocation || '—'}` : '—'}</span>
                             <span>{movement.qty}</span>
                             <span>{movement.batchRefs || '—'}</span>
                             <span>{movement.basis || movement.orderId || movement.purchaseId || '—'}</span>
@@ -17413,6 +17748,47 @@ function PartsPage({ products, requirements, receipts, movements, orders, sales,
                         )) : <div className="empty-state">Руху ще немає.</div>}
                       </div>
                     </div>
+                    {canDo('stock.transfer') && (
+                      <div className="stock-product-detail-block">
+                        <strong>Перемістити між складами / ячейками</strong>
+                        <div className="table">
+                          <label>
+                            Партія
+                            <select value={transferBatchId} onChange={(event) => setTransferBatchId(event.target.value)}>
+                              <option value="">Оберіть партію</option>
+                              {product.batches.filter((batch) => batch.qtyAvailable > 0).map((batch) => (
+                                <option key={batch.id} value={batch.id}>
+                                  {warehouseNameById(warehouses, batch.warehouseId ?? DEFAULT_WAREHOUSE_ID)} · {batchLocationLabel(batch)} · {batch.qtyAvailable} шт.
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label>
+                            Кількість
+                            <input type="number" min={1} value={transferQty} onChange={(event) => setTransferQty(event.target.value)} />
+                          </label>
+                          <label>
+                            Куди
+                            <select value={transferWarehouseId} onChange={(event) => setTransferWarehouseId(event.target.value)}>
+                              {warehouses.filter((warehouse) => warehouse.isActive).map((warehouse) => (
+                                <option key={warehouse.id} value={warehouse.id}>{warehouse.name}</option>
+                              ))}
+                            </select>
+                          </label>
+                          <label>
+                            Ячейка / полка
+                            <input value={transferLocation} placeholder="A-3-2 або Секція B / полка 6" onChange={(event) => setTransferLocation(event.target.value)} />
+                          </label>
+                          <label>
+                            Причина
+                            <input value={transferReason} placeholder="Внутрішнє переміщення / видача інженеру / брак" onChange={(event) => setTransferReason(event.target.value)} />
+                          </label>
+                        </div>
+                        <div className="action-row">
+                          <button type="button" onClick={() => submitTransfer(product)} disabled={!transferBatchId}>Перемістити</button>
+                        </div>
+                      </div>
+                    )}
                     {canReceiveStock && (
                       <div className="action-row">
                         <button type="button" onClick={() => { setIntakeMode('existing'); setIntakeProductId(product.id); setIntakePrice(String(product.cost || '')); setIntakeBarcode(''); window.scrollTo({ top: 0, behavior: 'smooth' }); }}>Додати прихід</button>
