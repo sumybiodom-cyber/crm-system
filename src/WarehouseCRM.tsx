@@ -5217,11 +5217,13 @@ useEffect(() => {
     if (result.type === 'order') {
       setSelectedOrderId(result.id);
       setDashboardFocus(null);
+      setPage(viewUser.role === 'Менеджер' ? 'orders' : 'orders');
     } else {
       setGlobalFocusedClientPhone(result.id);
-      setGlobalClientSearch(query.trim());
+      setGlobalClientSearch(result.id);
+      setPage('clients');
     }
-    stayOnCurrentPage();
+    setShowMenu(false);
     setQuery('');
     setShowGlobalSearchResults(false);
   }
@@ -5878,7 +5880,7 @@ useEffect(() => {
   }, [isSessionLocked, lockedAtTs]);
   const currentRole = isAdminPreviewAvailable ? adminPreviewRole : activeUser.role;
   const canLockScreen = Boolean(sessionUserId);
-  const previewUsers = users.filter((user) => user.role === currentRole);
+  const previewUsers = users.filter((user) => normalizeRoleAlias(user.role) === normalizeRoleAlias(currentRole));
   const selectedPreviewUser = previewUsers.find((user) => user.id === adminPreviewUserId) ?? null;
   const currentUser = selectedPreviewUser ?? (currentRole === activeUser.role ? activeUser : null);
   const viewUser = isAdminPreviewAvailable
@@ -5910,6 +5912,39 @@ useEffect(() => {
     ? internalMessages
     : internalMessages.filter((message) => message.toUser === viewUser.name || message.toRole === viewUser.role);
   const unreadInternalMessages = visibleInternalMessages.filter((message) => message.status === 'Нове').length;
+
+  function internalMessageTypeLabel(message: InternalMessage) {
+    const text = message.text.toLowerCase();
+    if (text.includes('готов')) return 'Заказ готовий';
+    if (text.includes('борг') || text.includes('оплат')) return 'Фінансове питання';
+    if (text.includes('простроч') || text.includes('без руху')) return 'Прострочка';
+    if (text.includes('запчаст')) return 'Немає запчастини';
+    if (text.includes('клієнт') || text.includes('клиент')) return 'Клієнтська подія';
+    return 'Робоче повідомлення';
+  }
+
+  function internalMessageSourceLabel(message: InternalMessage) {
+    const role = getInternalMessageAuthorRole(message, users);
+    return `${message.createdBy || 'Система'} · ${role}`;
+  }
+
+  function openOrderFromNotification(message: InternalMessage) {
+    if (!message.orderId) return;
+    if (message.status === 'Нове') updateInternalMessageStatus(message.id, 'Прочитано');
+    setIsNotificationsOpen(false);
+    setShowMenu(false);
+    setDashboardFocus(null);
+    setSelectedOrderId(message.orderId);
+    if (viewUser.role === 'Менеджер') {
+      setPage('dashboard');
+      return;
+    }
+    if (viewUser.role === 'Інженер') {
+      setPage('my-orders');
+      return;
+    }
+    setPage('orders');
+  }
 
   function productName(productId: string) {
     return products.find((product) => product.id === productId)?.name ?? 'Невідома запчастина';
@@ -10954,39 +10989,6 @@ useEffect(() => {
               <span>{roleDisplay(activeUser.role)}</span>
             </div>
           </div>
-          {!hideGlobalSearch && (
-            <div className="search-box">
-              <Search size={18} />
-              <input
-                value={query}
-                onChange={(event) => {
-                  setQuery(event.target.value);
-                  setShowGlobalSearchResults(Boolean(event.target.value.trim()));
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
-                    event.preventDefault();
-                    submitGlobalSearch();
-                  }
-                  if (event.key === 'Escape') {
-                    setShowGlobalSearchResults(false);
-                  }
-                }}
-                placeholder="Пошук: замовлення / клієнт / телефон / фірма / пристрій"
-              />
-              {showGlobalSearchResults && (
-                <div className="search-dropdown">
-                  {globalSearchResults.map((result) => (
-                    <button key={`${result.type}-${result.id}`} type="button" className="search-dropdown-row" onClick={() => openGlobalSearchResult(result)}>
-                      <strong>{result.title}</strong>
-                      <span>{result.subtitle}</span>
-                    </button>
-                  ))}
-                  {globalSearchResults.length === 0 && <div className="search-dropdown-empty">Нічого не знайдено</div>}
-                </div>
-              )}
-            </div>
-          )}
           <div style={{ position: 'relative' }}>
             <button
               className="icon-button notification-button"
@@ -10998,53 +11000,6 @@ useEffect(() => {
               <Bell size={19} />
               {unreadInternalMessages > 0 && <span>{unreadInternalMessages}</span>}
             </button>
-            {isNotificationsOpen && (
-              <div
-                style={{
-                  position: 'absolute',
-                  top: 'calc(100% + 8px)',
-                  right: 0,
-                  width: '340px',
-                  maxHeight: '360px',
-                  overflowY: 'auto',
-                  background: '#fff',
-                  border: '1px solid #dbe3ef',
-                  borderRadius: '16px',
-                  boxShadow: '0 18px 40px rgba(15, 23, 42, 0.18)',
-                  padding: '12px',
-                  zIndex: 30,
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                  <strong>Повідомлення</strong>
-                  <button type="button" className="icon-button" aria-label="Закрити повідомлення" onClick={() => setIsNotificationsOpen(false)}>
-                    <X size={16} />
-                  </button>
-                </div>
-                {visibleInternalMessages.length > 0 ? (
-                  <div style={{ display: 'grid', gap: '10px' }}>
-                    {visibleInternalMessages.slice(0, 8).map((message) => (
-                      <div key={message.id} style={{ border: '1px solid #e2e8f0', borderRadius: '12px', padding: '10px 12px', display: 'grid', gap: '6px' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'start' }}>
-                          <div style={{ display: 'grid', gap: '2px' }}>
-                            <strong>{message.createdBy || 'Система'}</strong>
-                            <span style={{ fontSize: '12px', color: '#64748b' }}>{getInternalMessageAuthorRole(message, users)}</span>
-                          </div>
-                          <span style={{ fontSize: '12px', color: '#64748b', textAlign: 'right' }}>{message.createdAt}</span>
-                        </div>
-                        <div style={{ fontSize: '14px', color: '#0f172a' }}>{message.text}</div>
-                        <div style={{ fontSize: '12px', color: '#64748b' }}>
-                          {message.orderId ? `Замовлення ${message.orderId} · ` : ''}
-                          Строк: {message.dueAt}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="empty-state">Новых уведомлений нет</div>
-                )}
-              </div>
-            )}
           </div>
           <div className="current-user-badge">
             <strong>👤 {activeUser.name}</strong>
@@ -11134,6 +11089,42 @@ useEffect(() => {
             <LogOut size={18} />
           </button>
         </header>
+
+        {isNotificationsOpen && (
+          <section className="panel notification-inline-panel" aria-label="Повідомлення менеджера">
+            <div className="notification-inline-header">
+              <div className="notification-inline-title">
+                <strong>🔔 Повідомлення</strong>
+                <span>{unreadInternalMessages > 0 ? `${unreadInternalMessages} нових` : 'Усі переглянуті'}</span>
+              </div>
+              <button type="button" className="notification-inline-close" onClick={() => setIsNotificationsOpen(false)}>
+                Згорнути
+              </button>
+            </div>
+            {visibleInternalMessages.length > 0 ? (
+              <div className="notification-inline-list">
+                {visibleInternalMessages.slice(0, 6).map((message) => (
+                  <article key={message.id} className={`notification-inline-row notification-inline-row-${message.status === 'Нове' ? 'unread' : 'read'}`}>
+                    <div className="notification-inline-main">
+                      <span className={`notification-card-kind notification-card-kind-${message.importance === 'Критична' ? 'critical' : message.importance === 'Важлива' ? 'important' : 'normal'}`}>{internalMessageTypeLabel(message)}</span>
+                      <strong>{message.orderId ? `Заказ ${message.orderId}` : 'Системне повідомлення'}</strong>
+                      <span>{message.text}</span>
+                      <small>{internalMessageSourceLabel(message)} · {message.createdAt}</small>
+                    </div>
+                    <div className="notification-inline-actions">
+                      {message.orderId && <button type="button" className="notification-action-primary" onClick={() => openOrderFromNotification(message)}>Відкрити заказ</button>}
+                      <button type="button" className="notification-action-secondary" onClick={() => updateInternalMessageStatus(message.id, 'Прочитано')} disabled={message.status !== 'Нове'}>
+                        {message.status === 'Нове' ? 'Прочитано' : 'Переглянуто'}
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <div className="empty-state">Новых уведомлений нет</div>
+            )}
+          </section>
+        )}
 
         <nav className={`workspace-nav${showMenu ? ' workspace-nav-open' : ''}`} aria-label="Основна навігація">
           {visibleNavItems.map((item) => (
@@ -13998,7 +13989,7 @@ function OrdersPage(props: {
     return '🧾';
   };
   const [managerSearch, setManagerSearch] = useState('');
-  const [managerFilter, setManagerFilter] = useState<'all' | 'Прийнято' | 'В ремонті' | 'Готово' | 'Видано' | 'Борг' | 'Очікує оплату'>('all');
+  const [managerFilter, setManagerFilter] = useState<'none' | 'all' | 'Прийнято' | 'В ремонті' | 'Готово' | 'Видано' | 'Борг' | 'Очікує оплату'>('none');
   const [showManagerCreateForm, setShowManagerCreateForm] = useState(false);
   const [addingPartOrderId, setAddingPartOrderId] = useState('');
   const [partSearch, setPartSearch] = useState('');
@@ -14014,6 +14005,7 @@ function OrdersPage(props: {
   const [managerExceptionDraft, setManagerExceptionDraft] = useState<{ orderId: string; mode: 'cancel' | 'reopen' | 'refund' | 'part-return'; reason: string; comment: string; amount: string; partId?: string } | null>(null);
   const managerPaymentAmountInputRef = useRef<HTMLInputElement | null>(null);
   const lastOpenQuickOrderRequestRef = useRef(props.openQuickOrderRequest ?? 0);
+  const lastSyncedSelectedOrderIdRef = useRef(props.selectedOrderId);
 
   useEffect(() => {
     if (!props.openQuickOrderRequest) return;
@@ -14048,19 +14040,22 @@ function OrdersPage(props: {
     const total = Math.max(order.repairPrice ?? order.estimatedAmount ?? orderTotals(order).total, 0);
     const paid = order.payments.filter(paymentCountsAsApplied).reduce((sum, payment) => sum + payment.amount, 0);
     const remaining = Math.max(total - paid, 0);
+    if (managerFilter === 'none') return false;
     if (managerFilter === 'all') return true;
     if (managerFilter === 'Борг') return remaining > 0 && (Boolean(order.legalEntity) || Boolean(order.contractId) || simpleRepairStatus(order.status) === 'Видано');
     if (managerFilter === 'Очікує оплату') return remaining > 0 && simpleRepairStatus(order.status) === 'Готово' && order.status !== 'Видано';
     return simpleRepairStatus(order.status) === managerFilter;
   };
-  const managerVisibleOrders = [...managerSourceOrders]
-    .filter((order) => !['Скасовано', 'Закрито'].includes(order.status))
+  const hasManagerSearch = Boolean(managerSearch.trim());
+  const hasActiveManagerFilter = managerFilter !== 'none';
+  const managerBaseOrders = [...managerSourceOrders]
+    .filter((order) => !['Скасовано', 'Закрито'].includes(order.status));
+  const managerVisibleOrders = managerBaseOrders
     .filter((order) => {
-      const needle = managerSearch.trim();
-      if (!needle) return true;
-      return matchesOrderSearch(order, needle);
+      if (hasManagerSearch) return matchesOrderSearch(order, managerSearch);
+      if (!hasActiveManagerFilter) return false;
+      return managerFilterMatch(order);
     })
-    .filter((order) => managerFilterMatch(order))
     .sort((a, b) => (parseDateTime(b.createdAt ?? b.intakeDate)?.getTime() ?? 0)
       - (parseDateTime(a.createdAt ?? a.intakeDate)?.getTime() ?? 0));
   const activeManagerOrder = managerVisibleOrders.find((order) => order.id === managerActiveOrderId) ?? managerVisibleOrders[0];
@@ -14099,6 +14094,24 @@ function OrdersPage(props: {
       setManagerActiveOrderId(managerVisibleOrders[0]?.id ?? '');
     }
   }, [isManager, managerVisibleOrders, managerActiveOrderId]);
+
+  useEffect(() => {
+    if (!isManager) return;
+    if (props.selectedOrderId === lastSyncedSelectedOrderIdRef.current) return;
+    lastSyncedSelectedOrderIdRef.current = props.selectedOrderId;
+    if (!props.selectedOrderId || !managerSourceOrders.some((order) => order.id === props.selectedOrderId)) return;
+    setShowManagerCreateForm(false);
+    setManagerFilter('all');
+    setManagerSearch(props.selectedOrderId);
+    setManagerActiveOrderId(props.selectedOrderId);
+    setIsManagerOrderDetailOpen(true);
+    pulseManagerOrder(props.selectedOrderId);
+    if (typeof window !== 'undefined') {
+      window.requestAnimationFrame(() => {
+        document.getElementById(`manager-order-row-${props.selectedOrderId}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      });
+    }
+  }, [isManager, managerSourceOrders, props.selectedOrderId]);
 
   useEffect(() => {
     if (!isManager) return;
@@ -14691,7 +14704,7 @@ function OrdersPage(props: {
     };
 
     const groupedManagerOrders = {
-      urgent: managerVisibleOrders.filter((order) => {
+      urgent: managerBaseOrders.filter((order) => {
         const remaining = clientOrderDebt(order);
         return remaining > 0 && order.status === 'Видано'
           || (simpleRepairStatus(order.status) === 'Готово' && remaining > 0)
@@ -14699,7 +14712,7 @@ function OrdersPage(props: {
           || (!order.engineer && hoursSince(order.statusChangedAt) >= 24)
           || hoursSince(order.statusChangedAt) >= 72;
       }).sort(managerGroupSort),
-      attention: managerVisibleOrders.filter((order) => {
+      attention: managerBaseOrders.filter((order) => {
         const remaining = clientOrderDebt(order);
         const isUrgent = remaining > 0 && order.status === 'Видано'
           || (simpleRepairStatus(order.status) === 'Готово' && remaining > 0)
@@ -14711,7 +14724,7 @@ function OrdersPage(props: {
           || !order.engineer
           || order.payments.some((payment) => paymentNeedsConfirmation(payment));
       }).sort(managerGroupSort),
-      normal: managerVisibleOrders.filter((order) => {
+      normal: managerBaseOrders.filter((order) => {
         const remaining = clientOrderDebt(order);
         const isUrgent = remaining > 0 && order.status === 'Видано'
           || (simpleRepairStatus(order.status) === 'Готово' && remaining > 0)
@@ -14729,22 +14742,25 @@ function OrdersPage(props: {
       <div className="page-grid manager-orders-page">
         <section className="panel manager-orders-toolbar">
           <div className="manager-orders-toolbar-search">
-            <div className="manager-orders-search-input">
-              <input
-                value={managerSearch}
-                onChange={(event) => setManagerSearch(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
-                    event.preventDefault();
-                    handleManagerSearchSubmit();
-                  }
-                }}
-                placeholder="Пошук: номер / телефон / клієнт / пристрій"
-              />
-              <button type="button" className="manager-orders-search-button" onClick={handleManagerSearchSubmit} aria-label="Запустити пошук">
-                <Search size={16} />
-              </button>
-            </div>
+            {!showManagerCreateForm && (
+              <div className="manager-orders-search-input">
+                <input
+                  type="text"
+                  value={managerSearch}
+                  onChange={(event) => setManagerSearch(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      handleManagerSearchSubmit();
+                    }
+                  }}
+                  placeholder="Пошук: номер / телефон / клієнт / пристрій"
+                />
+                <button type="button" className="manager-orders-search-button" onClick={handleManagerSearchSubmit} aria-label="Знайти замовлення">
+                  🔍
+                </button>
+              </div>
+            )}
             <button type="button" className="submit-button" onClick={openManagerCreateMode}>
               ➕ Нове замовлення
             </button>
@@ -14762,7 +14778,7 @@ function OrdersPage(props: {
           )}
         </section>
 
-        {!showManagerCreateForm && managerSearch.trim() && (
+        {!showManagerCreateForm && hasManagerSearch && (
           <section className="panel manager-orders-search-assist">
             <div className="panel-heading">
               <h2>Результати пошуку</h2>
@@ -14928,6 +14944,21 @@ function OrdersPage(props: {
           </section>
         )}
 
+        {!showManagerCreateForm && !hasManagerSearch && !hasActiveManagerFilter && (
+          <>
+            <section className="stats-grid manager-home-kpis">
+              <Metric icon={<ClipboardList />} label="Всього замовлень" value={String(managerBaseOrders.length)} hint="активний реєстр менеджера" />
+              <Metric icon={<History />} label="Прийнято" value={String(managerBaseOrders.filter((order) => simpleRepairStatus(order.status) === 'Прийнято').length)} hint="очікують наступного кроку" />
+              <Metric icon={<Wrench />} label="В ремонті" value={String(managerBaseOrders.filter((order) => simpleRepairStatus(order.status) === 'В ремонті').length)} hint="зараз у роботі" />
+              <Metric icon={<PackageCheck />} label="Готово до видачі" value={String(managerAlerts.readyWaiting)} hint="потрібна дія менеджера" />
+              <Metric icon={<Banknote />} label="Борг" value={String(managerAlerts.debt)} hint="замовлення з фінансовим ризиком" />
+            </section>
+            <section className="panel empty-state manager-home-hint">
+              Оберіть фільтр або скористайтесь пошуком
+            </section>
+          </>
+        )}
+
         {showManagerCreateForm ? (
           <section className="panel manager-orders-create">
             <div className="panel-heading">
@@ -14986,7 +15017,7 @@ function OrdersPage(props: {
           </section>
         ) : (
         <>
-        <div className="manager-orders-workspace">
+        {!hasManagerSearch && hasActiveManagerFilter && <div className="manager-orders-workspace">
           <section className="panel manager-orders-list manager-orders-list-full">
             <div className="panel-heading">
               <h2>{props.allRoleOrders ? 'Мої замовлення' : 'Всі замовлення'}</h2>
@@ -15005,6 +15036,7 @@ function OrdersPage(props: {
                   <button
                     type="button"
                     key={order.id}
+                    id={`manager-order-row-${order.id}`}
                     className={`manager-order-list-row manager-order-compact-row${managerActiveOrderId === order.id && isManagerOrderDetailOpen ? ' is-active' : ''}${order.status === 'Видано' ? ' is-issued' : ''}${actionMeta.signal === 'danger' ? ' is-problem' : actionMeta.signal === 'warning' ? ' is-warning' : actionMeta.signal === 'success' ? ' is-success' : ''}`}
                     onClick={() => openManagerOrderDetails(order.id)}
                   >
@@ -15076,7 +15108,7 @@ function OrdersPage(props: {
               {managerVisibleOrders.length === 0 && <div className="empty-state">Немає замовлень</div>}
             </div>
           </section>
-        </div>
+        </div>}
         {isManagerOrderDetailOpen && activeManagerOrder && (
           <div className="manager-order-modal-backdrop" onClick={() => setIsManagerOrderDetailOpen(false)}>
             <section className="panel manager-order-focus manager-order-modal" onClick={(event) => event.stopPropagation()}>
@@ -19885,9 +19917,6 @@ function ClientsPage({
     <div className="page-grid clients-page">
       <PageTitle eyebrow="Клієнти" title="Клієнтська база сервісу" text="Пошук, борги, історія звернень і швидкий старт нового замовлення." />
       <section className="panel manager-orders-toolbar clients-toolbar">
-        <div className="manager-orders-toolbar-search">
-          <input value={clientSearch} onChange={(event) => setClientSearch(event.target.value)} placeholder="Пошук: телефон / ім'я / компанія / ЄДРПОУ / ІПН" />
-        </div>
         <div className="manager-orders-toolbar-filter">
           <input ref={importClientsInputRef} type="file" accept=".xlsx,.csv" onChange={handleClientsFileChange} style={{ display: 'none' }} />
           <button type="button" className={clientFilter === 'all' ? 'primary' : ''} onClick={() => setClientFilter('all')}>Усі</button>
