@@ -15651,7 +15651,7 @@ function OrdersPage(props: {
     return (
       <div className="page-grid manager-orders-page">
         <PageTitle eyebrow="Головна" title="Головна сторінка" text="Пошук, дії по замовленнях і щоденна робоча стрічка менеджера в одному workspace." />
-        <section className="panel manager-orders-toolbar workspace-action-line">
+        <section className="panel manager-orders-toolbar manager-home-command-panel workspace-action-line">
           <div className="manager-orders-toolbar-search workspace-action-main">
             {!showManagerCreateForm && (
               <div className="manager-orders-search-input workspace-action-search">
@@ -15690,7 +15690,7 @@ function OrdersPage(props: {
         </section>
 
         {!showManagerCreateForm && hasManagerSearch && (
-          <section className="panel manager-orders-search-assist">
+          <section className="panel manager-orders-search-assist manager-home-search-panel">
             <div className="panel-heading">
               <h2>Результати пошуку</h2>
               <span>Швидкий доступ до замовлень і клієнтів</span>
@@ -15780,7 +15780,7 @@ function OrdersPage(props: {
         )}
 
         {!showManagerCreateForm && managerPostPaymentOrder && (
-          <section className="panel manager-orders-documents-assist">
+          <section className="panel manager-orders-documents-assist manager-home-followup-panel">
             <div className="panel-heading">
               <h2>Оплату підтверджено</h2>
               <span>{managerPostPaymentOrder.id} · борг закрито, система веде далі</span>
@@ -15844,7 +15844,7 @@ function OrdersPage(props: {
         )}
 
         {!showManagerCreateForm && (
-          <section className="manager-orders-signals">
+          <section className="panel manager-orders-signals manager-home-priority-panel">
             {managerAlerts.debt > 0 && <span className="manager-order-hint manager-order-hint-danger">Борг: {managerAlerts.debt}</span>}
             {managerAlerts.unpaid > 0 && <span className="manager-order-hint manager-order-hint-warning">Не оплачено: {managerAlerts.unpaid}</span>}
             {managerAlerts.readyWaiting > 0 && <span className="manager-order-hint manager-order-hint-danger">Готово, не видано: {managerAlerts.readyWaiting}</span>}
@@ -15856,12 +15856,20 @@ function OrdersPage(props: {
         )}
 
         {!showManagerCreateForm && !hasManagerSearch && !hasActiveManagerFilter && (
-          <section className="stats-grid" aria-label="Статуси замовлень менеджера">
-            <Metric icon={<ClipboardList />} label="Замовлення" value={String(managerBaseOrders.length)} hint="усі активні замовлення" />
-            <Metric icon={<PackageCheck />} label="Прийнято" value={String(managerBaseOrders.filter((order) => simpleRepairStatus(order.status) === 'Прийнято').length)} hint="нові у роботі менеджера" />
-            <Metric icon={<Wrench />} label="В ремонті" value={String(managerBaseOrders.filter((order) => simpleRepairStatus(order.status) === 'В ремонті').length)} hint="зараз у цеху" />
-            <Metric icon={<CheckCircle2 />} label="Готово" value={String(managerAlerts.readyWaiting)} hint="готові до видачі" />
-            <Metric icon={<X />} label="Борг" value={String(managerAlerts.debt)} hint="замовлення з оплатою" />
+          <section className="panel manager-home-stats-panel" aria-label="Статуси замовлень менеджера">
+            <div className="manager-home-stats-head">
+              <div>
+                <strong>Операційний зріз</strong>
+                <span>Короткий стан замовлень без відриву від робочої стрічки.</span>
+              </div>
+            </div>
+            <div className="stats-grid manager-home-stats-grid">
+              <Metric icon={<ClipboardList />} label="Замовлення" value={String(managerBaseOrders.length)} hint="усі активні замовлення" />
+              <Metric icon={<PackageCheck />} label="Прийнято" value={String(managerBaseOrders.filter((order) => simpleRepairStatus(order.status) === 'Прийнято').length)} hint="нові у роботі менеджера" />
+              <Metric icon={<Wrench />} label="В ремонті" value={String(managerBaseOrders.filter((order) => simpleRepairStatus(order.status) === 'В ремонті').length)} hint="зараз у цеху" />
+              <Metric icon={<CheckCircle2 />} label="Готово" value={String(managerAlerts.readyWaiting)} hint="готові до видачі" />
+              <Metric icon={<X />} label="Борг" value={String(managerAlerts.debt)} hint="замовлення з оплатою" />
+            </div>
           </section>
         )}
 
@@ -15923,11 +15931,69 @@ function OrdersPage(props: {
           </section>
         ) : (
         <>
-        {!hasManagerSearch && (hasActiveManagerFilter || (!showManagerCreateForm && !hasActiveManagerFilter)) && <div className="manager-orders-workspace">
-          <section className="panel manager-orders-list manager-orders-list-full">
-            <div className="panel-heading">
-              <h2>{hasActiveManagerFilter ? (props.allRoleOrders ? 'Мої замовлення' : 'Всі замовлення') : 'Операційна стрічка'}</h2>
-              <span>{hasActiveManagerFilter ? managerVisibleOrders.length : managerOperationalOrders.length}</span>
+        {!hasManagerSearch && !showManagerCreateForm && (
+          <div className="manager-orders-workspace manager-home-workspace-grid">
+            <aside className="panel manager-home-rail manager-home-rail-left">
+              <div className="manager-home-rail-section">
+                <div className="manager-home-rail-head">
+                  <strong>Робочі черги</strong>
+                  <span>Швидкий перехід без пошуку</span>
+                </div>
+                <div className="manager-home-queue-grid">
+                  <button type="button" className={`manager-home-queue-card${managerFilter === 'all' ? ' is-active' : ''}`} onClick={() => setManagerFilter('all')}>
+                    <strong>{managerBaseOrders.length}</strong>
+                    <span>Усі замовлення</span>
+                  </button>
+                  <button type="button" className={`manager-home-queue-card${managerFilter === 'Готово' ? ' is-active' : ''}`} onClick={() => setManagerFilter('Готово')}>
+                    <strong>{managerAlerts.readyWaiting}</strong>
+                    <span>Готово</span>
+                  </button>
+                  <button type="button" className={`manager-home-queue-card${managerFilter === 'Борг' ? ' is-active' : ''}`} onClick={() => setManagerFilter('Борг')}>
+                    <strong>{managerAlerts.debt}</strong>
+                    <span>Борг</span>
+                  </button>
+                  <button type="button" className={`manager-home-queue-card${managerFilter === 'Очікує оплату' ? ' is-active' : ''}`} onClick={() => setManagerFilter('Очікує оплату')}>
+                    <strong>{managerAlerts.unpaid}</strong>
+                    <span>Очікує оплату</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="manager-home-rail-section">
+                <div className="manager-home-rail-head">
+                  <strong>Пріоритети</strong>
+                  <span>Що треба розібрати першим</span>
+                </div>
+                <div className="manager-home-priority-stack">
+                  <button type="button" className="manager-home-priority-card tone-danger" onClick={() => groupedManagerOrders.urgent[0] && openManagerOrderDetails(groupedManagerOrders.urgent[0].id)}>
+                    <span>Критично</span>
+                    <strong>{groupedManagerOrders.urgent.length}</strong>
+                    <small>{groupedManagerOrders.urgent[0] ? `${groupedManagerOrders.urgent[0].id} · ${groupedManagerOrders.urgent[0].client}` : 'Немає термінових замовлень'}</small>
+                  </button>
+                  <button type="button" className="manager-home-priority-card tone-warning" onClick={() => groupedManagerOrders.attention[0] && openManagerOrderDetails(groupedManagerOrders.attention[0].id)}>
+                    <span>Потребує уваги</span>
+                    <strong>{groupedManagerOrders.attention.length}</strong>
+                    <small>{groupedManagerOrders.attention[0] ? `${groupedManagerOrders.attention[0].id} · ${groupedManagerOrders.attention[0].client}` : 'Немає завислих задач'}</small>
+                  </button>
+                  <button type="button" className="manager-home-priority-card tone-neutral" onClick={() => groupedManagerOrders.normal[0] && openManagerOrderDetails(groupedManagerOrders.normal[0].id)}>
+                    <span>Спокійний потік</span>
+                    <strong>{groupedManagerOrders.normal.length}</strong>
+                    <small>{groupedManagerOrders.normal[0] ? `${groupedManagerOrders.normal[0].id} · ${groupedManagerOrders.normal[0].client}` : 'Активних замовлень немає'}</small>
+                  </button>
+                </div>
+              </div>
+            </aside>
+
+            <section className="panel manager-orders-list manager-orders-list-full manager-home-stream-panel">
+            <div className="panel-heading manager-home-stream-heading">
+              <div className="manager-home-stream-title">
+                <h2>{hasActiveManagerFilter ? (props.allRoleOrders ? 'Мої замовлення' : 'Всі замовлення') : 'Операційна стрічка'}</h2>
+                <span>{hasActiveManagerFilter ? 'Поточна вибірка по фільтру' : 'Пріоритетні та свіжі замовлення для швидкої роботи менеджера'}</span>
+              </div>
+              <div className="manager-home-stream-meta">
+                <strong>{hasActiveManagerFilter ? managerVisibleOrders.length : managerOperationalOrders.length}</strong>
+                <span>{hasActiveManagerFilter ? 'у списку' : 'в стрічці'}</span>
+              </div>
             </div>
             <div className="manager-orders-list-body">
               {(hasActiveManagerFilter ? managerVisibleOrders : managerOperationalOrders).map((order) => {
@@ -16031,8 +16097,62 @@ function OrdersPage(props: {
               })}
               {(hasActiveManagerFilter ? managerVisibleOrders.length : managerOperationalOrders.length) === 0 && <div className="empty-state">Немає замовлень</div>}
             </div>
-          </section>
-        </div>}
+            </section>
+
+            <aside className="panel manager-home-rail manager-home-rail-right">
+              <div className="manager-home-rail-section">
+                <div className="manager-home-rail-head">
+                  <strong>Контекст зміни</strong>
+                  <span>Операційні сигнали без відкриття звіту</span>
+                </div>
+                <div className="manager-home-context-list">
+                  <div className="manager-home-context-item">
+                    <span>Без інженера</span>
+                    <strong>{managerAlerts.noEngineer}</strong>
+                  </div>
+                  <div className="manager-home-context-item">
+                    <span>Готово до видачі</span>
+                    <strong>{managerAlerts.readyWaiting}</strong>
+                  </div>
+                  <div className="manager-home-context-item">
+                    <span>Чекають оплату</span>
+                    <strong>{managerAlerts.unpaid}</strong>
+                  </div>
+                  <div className="manager-home-context-item">
+                    <span>З боргом</span>
+                    <strong>{managerAlerts.debt}</strong>
+                  </div>
+                </div>
+              </div>
+
+              <div className="manager-home-rail-section">
+                <div className="manager-home-rail-head">
+                  <strong>Фокус зараз</strong>
+                  <span>Швидкі переходи до найближчих дій</span>
+                </div>
+                <div className="manager-home-focus-list">
+                  {groupedManagerOrders.urgent.slice(0, 3).map((order) => (
+                    <button key={order.id} type="button" className="manager-home-focus-row" onClick={() => openManagerOrderDetails(order.id)}>
+                      <strong>{order.id}</strong>
+                      <span>{order.client}</span>
+                      <small>{managerOrderStatusLabel(order.status)}</small>
+                    </button>
+                  ))}
+                  {groupedManagerOrders.urgent.length === 0 && groupedManagerOrders.attention.slice(0, 3).map((order) => (
+                    <button key={order.id} type="button" className="manager-home-focus-row" onClick={() => openManagerOrderDetails(order.id)}>
+                      <strong>{order.id}</strong>
+                      <span>{order.client}</span>
+                      <small>{managerOrderStatusLabel(order.status)}</small>
+                    </button>
+                  ))}
+                  {groupedManagerOrders.urgent.length === 0 && groupedManagerOrders.attention.length === 0 && (
+                    <div className="empty-state">Сильних блокерів зараз немає.</div>
+                  )}
+                </div>
+              </div>
+            </aside>
+          </div>
+        )}
         {isManagerOrderDetailOpen && activeManagerOrder && (
           <div className="manager-order-modal-backdrop" onClick={() => setIsManagerOrderDetailOpen(false)}>
             <section className="panel manager-order-focus manager-order-modal" onClick={(event) => event.stopPropagation()}>
