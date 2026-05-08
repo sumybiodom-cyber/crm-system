@@ -5968,7 +5968,7 @@ useEffect(() => {
       : assistantMode === 'wide'
         ? Math.max(assistantWidth, assistantWideWidth)
         : assistantWidth;
-  const assistantContentOffset = !isAssistantVisible || isAssistantInlineLayout
+  const assistantContentOffset = !isAssistantVisible || isAssistantInlineLayout || assistantMode === 'fullscreen'
     ? 0
     : isAssistantCollapsed
       ? 72
@@ -11572,7 +11572,10 @@ useEffect(() => {
   }
   return (
     <div className="app-shell">
-      <main className="workspace">
+      <main
+        className={`workspace${isAssistantVisible ? ' workspace-shell-with-assistant' : ''}${isAssistantVisible && assistantMode === 'fullscreen' ? ' workspace-shell-assistant-fullscreen' : ''}`}
+        style={{ ['--assistant-offset' as string]: `${assistantContentOffset}px` }}
+      >
         <header className="topbar">
           <button className="icon-button mobile-only" onClick={() => setShowMenu(!showMenu)} aria-label="Відкрити меню">
             {showMenu ? <X size={20} /> : <Menu size={20} />}
@@ -11759,10 +11762,7 @@ useEffect(() => {
         </nav>
 
         <ToastStack toasts={toasts} onDismiss={(id) => setToasts((current) => current.filter((toast) => toast.id !== id))} />
-        <div
-          className={`workspace-body${isAssistantVisible ? ' workspace-body-with-assistant' : ''}${isAssistantVisible && isAssistantCollapsed ? ' workspace-body-assistant-collapsed' : ''}`}
-          style={{ ['--assistant-offset' as string]: `${assistantContentOffset}px` }}
-        >
+        <div className={`workspace-body${isAssistantVisible ? ' workspace-body-with-assistant' : ''}${isAssistantVisible && isAssistantCollapsed ? ' workspace-body-assistant-collapsed' : ''}`}>
           <div className="workspace-content">
             {!canViewPage(page) && <AccessDenied activeUser={viewUser} page={page} />}
             {canViewPage(page) && page === 'dashboard' && viewUser.role === 'Менеджер' && (

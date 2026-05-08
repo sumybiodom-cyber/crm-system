@@ -153,6 +153,14 @@ button {
   padding: 16px 24px 40px;
 }
 
+.workspace-shell-with-assistant {
+  padding-right: calc(24px + var(--assistant-offset, 0px));
+}
+
+.workspace-shell-assistant-fullscreen {
+  padding-right: 24px;
+}
+
 .topbar {
   position: sticky;
   top: 0;
@@ -212,11 +220,11 @@ button {
 }
 
 .workspace-body-with-assistant .workspace-content {
-  padding-right: var(--assistant-offset, 376px);
+  padding-right: 0;
 }
 
 .workspace-body-with-assistant.workspace-body-assistant-collapsed .workspace-content {
-  padding-right: var(--assistant-offset, 72px);
+  padding-right: 0;
 }
 
 .assistant-toggle-button {
@@ -249,7 +257,11 @@ button {
 }
 
 .workspace-assistant-fullscreen {
-  max-width: calc(100vw - 48px);
+  top: 16px;
+  right: 16px;
+  bottom: 16px;
+  max-width: calc(100vw - 32px);
+  z-index: 20;
 }
 
 .workspace-assistant-panel {
