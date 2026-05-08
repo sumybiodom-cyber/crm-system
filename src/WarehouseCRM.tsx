@@ -34,6 +34,7 @@ import {
 import { ServiceFlowAnimation } from './remotion/ServiceFlowAnimation';
 
 type Page = 'dashboard' | 'inbox' | 'employee-control' | 'contracts' | 'bank-import' | 'orders' | 'my-orders' | 'sales' | 'clients' | 'parts' | 'purchases' | 'cash' | 'returns' | 'documents' | 'tax-invoices' | 'bas-exchange' | 'problem-clients' | 'order-units' | 'storage' | 'movements' | 'finance' | 'reports' | 'payroll' | 'acceptance' | 'team' | 'settings';
+type ManagerDashboardFilter = 'none' | 'all' | 'Прийнято' | 'В ремонті' | 'Готово' | 'Видано' | 'Борг' | 'Очікує оплату';
 type PaymentMethod = 'Готівка' | 'Картка' | 'Безготівка' | 'Змішана';
 type PaymentType = 'Передплата' | 'Часткова оплата' | 'Повна оплата' | 'Доплата' | 'Повернення коштів';
 type SaleStatus = 'Чернетка' | 'Зарезервовано' | 'Очікує оплати' | 'Частково оплачено' | 'Оплачено' | 'Видано' | 'Закрито' | 'Скасовано' | 'Повернення';
@@ -909,6 +910,28 @@ type InternalMessage = {
   status: InternalMessageStatus;
   createdBy: string;
   createdAt: string;
+};
+type AssistantActionTone = 'primary' | 'secondary';
+type AssistantAction = {
+  label: string;
+  tone?: AssistantActionTone;
+  run: () => void;
+};
+type AssistantMessage = {
+  id: string;
+  author: 'assistant' | 'user';
+  title?: string;
+  text: string;
+  steps?: string[];
+  context?: string;
+  actions?: AssistantAction[];
+  createdAt: string;
+};
+type AssistantDashboardRequest = {
+  id: number;
+  mode: 'filter' | 'search';
+  filter?: ManagerDashboardFilter;
+  query?: string;
 };
 type Permission =
   | 'clients.view'
@@ -5168,6 +5191,14 @@ useEffect(() => {
   const [adminPreviewRole, setAdminPreviewRole] = useState<Role>('Адміністратор');
   const [adminPreviewUserId, setAdminPreviewUserId] = useState('');
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
+  const [isAssistantVisible, setIsAssistantVisible] = useState(true);
+  const [isAssistantCollapsed, setIsAssistantCollapsed] = useState(false);
+  const [assistantInput, setAssistantInput] = useState('');
+  const [assistantMessages, setAssistantMessages] = useState<AssistantMessage[]>([]);
+  const [isAssistantLoading, setIsAssistantLoading] = useState(false);
+  const [assistantDashboardRequest, setAssistantDashboardRequest] = useState<AssistantDashboardRequest | null>(null);
+  const assistantLogRef = useRef<HTMLDivElement | null>(null);
+  const assistantEndRef = useRef<HTMLDivElement | null>(null);
 
   const sessionUserRecord = users.find((user) => user.id === sessionUserId) ?? null;
   const activeUserRecord = users.find((user) => user.id === activeUserId) ?? sessionUserRecord;
@@ -5912,6 +5943,145 @@ useEffect(() => {
     ? internalMessages
     : internalMessages.filter((message) => message.toUser === viewUser.name || message.toRole === viewUser.role);
   const unreadInternalMessages = visibleInternalMessages.filter((message) => message.status === 'Нове').length;
+  const assistantPageLabel = navLabelForRole(page, viewUser.role);
+  const assistantSelectedOrder = orders.find((order) => order.id === selectedOrderId) ?? null;
+  const assistantContextSummary = `${roleDisplay(viewUser.role)} · ${assistantPageLabel}`;
+  const assistantTimestamp = () => new Date().toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' });
+  const pushAssistantMessages = (entries: AssistantMessage[]) => {
+    setAssistantMessages((current) => [...current, ...entries].slice(-24));
+  };
+  const openAssistantClient = (phone: string, search = phone) => {
+    setGlobalFocusedClientPhone(phone);
+    setGlobalClientSearch(search);
+    setPage('clients');
+    setShowMenu(false);
+  };
+  const openAssistantOrder = (orderId: string) => {
+    setSelectedOrderId(orderId);
+    setDashboardFocus(null);
+    if (viewUser.role === 'Менеджер') {
+      setPage('dashboard');
+    } else if (viewUser.role === 'Інженер') {
+      setPage('my-orders');
+    } else {
+      setPage('orders');
+    }
+    setShowMenu(false);
+  };
+  const requestAssistantDashboardFilter = (filter: ManagerDashboardFilter) => {
+    setAssistantDashboardRequest((current) => ({ id: (current?.id ?? 0) + 1, mode: 'filter', filter }));
+    setPage('dashboard');
+    setShowMenu(false);
+  };
+  const requestAssistantDashboardSearch = (value: string) => {
+    setAssistantDashboardRequest((current) => ({ id: (current?.id ?? 0) + 1, mode: 'search', query: value }));
+    setPage('dashboard');
+    setShowMenu(false);
+  };
+  const openAssistantCreateOrder = () => {
+    setOpenQuickOrderRequest((current) => current + 1);
+    if (viewUser.role === 'Менеджер') {
+      setPage('dashboard');
+    } else if (canViewPage('orders')) {
+      setPage('orders');
+    } else if (canViewPage('my-orders')) {
+      setPage('my-orders');
+    }
+    setShowMenu(false);
+  };
+  const assistantPermissionContext = useMemo(() => ({
+    finance: canViewPage('finance'),
+    payments: canDo('finance.payments'),
+    warehouse: canViewPage('parts'),
+    purchases: canViewPage('purchases'),
+    documents: canViewPage('documents'),
+    payroll: canViewPage('payroll'),
+    settings: canViewPage('settings'),
+    profit: canDo('profit.view'),
+    salary: canDo('profit.view') || canViewPage('payroll'),
+    cost: canDo('cost.view'),
+  }), [canDo, canViewPage]);
+  const assistantActiveObject = useMemo(() => {
+    if (page === 'dashboard' || page === 'orders' || page === 'my-orders') {
+      if (!assistantSelectedOrder) return null;
+      return {
+        type: 'order',
+        id: assistantSelectedOrder.id,
+        title: assistantSelectedOrder.client,
+        subtitle: `${assistantSelectedOrder.device} · ${assistantSelectedOrder.status}`,
+      };
+    }
+    if (page === 'sales' && selectedSale) {
+      return {
+        type: 'sale',
+        id: selectedSale.id,
+        title: selectedSale.client,
+        subtitle: `${selectedSale.items.length} позицій · ${selectedSale.status}`,
+      };
+    }
+    if (page === 'parts') {
+      const selectedProduct = products.find((product) => product.id === selectedProductId);
+      if (!selectedProduct) return null;
+      return {
+        type: 'product',
+        id: selectedProduct.id,
+        title: selectedProduct.name,
+        subtitle: `${selectedProduct.sku || 'без SKU'} · ${selectedProduct.storageLocation || 'без місця'}`,
+      };
+    }
+    if (page === 'clients' && globalFocusedClientPhone) {
+      const focusedClient = customerList.find((client) => client.phone === globalFocusedClientPhone) ?? null;
+      if (!focusedClient) return null;
+      return {
+        type: 'client',
+        id: focusedClient.phone,
+        title: focusedClient.name,
+        subtitle: focusedClient.phone,
+      };
+    }
+    return null;
+  }, [assistantSelectedOrder, customerList, globalFocusedClientPhone, page, products, selectedProductId, selectedSale]);
+  const assistantApiContext = useMemo(() => ({
+    role: roleDisplay(viewUser.role),
+    roleKey: normalizeRoleAlias(viewUser.role),
+    section: assistantPageLabel,
+    page,
+    allowedPages: visibleNavItems.map((item) => item.label),
+    permissions: assistantPermissionContext,
+    activeObject: assistantActiveObject,
+    session: {
+      sessionUserId,
+      activeUserId,
+      userSessionStatus: activeUser.session,
+      isSessionLocked,
+    },
+  }), [activeUser.session, activeUserId, assistantActiveObject, assistantPageLabel, assistantPermissionContext, isSessionLocked, page, sessionUserId, viewUser.role, visibleNavItems]);
+
+  useEffect(() => {
+    if (assistantMessages.length > 0) return;
+    setAssistantMessages([{
+      id: uid('AI'),
+      author: 'assistant',
+      title: 'AI Operational Assistant',
+      text: 'Я поруч у всій CRM: підкажу дії, поясню інтерфейс і допоможу швидко перейти до потрібного розділу або замовлення.',
+      steps: [
+        'Питайте звичайною мовою: "як прийняти замовлення", "покажи борги", "що готово до видачі".',
+        'Я враховую вашу роль, поточний розділ і відкритий контекст.',
+      ],
+      context: assistantContextSummary,
+      createdAt: assistantTimestamp(),
+    }]);
+  }, [assistantMessages.length, assistantContextSummary]);
+
+  useEffect(() => {
+    if (isAssistantCollapsed || !isAssistantVisible) return;
+    window.requestAnimationFrame(() => {
+      assistantEndRef.current?.scrollIntoView({ block: 'end' });
+      if (assistantLogRef.current) {
+        assistantLogRef.current.scrollTop = assistantLogRef.current.scrollHeight;
+      }
+    });
+  }, [assistantMessages, isAssistantCollapsed, isAssistantVisible]);
 
   function internalMessageTypeLabel(message: InternalMessage) {
     const text = message.text.toLowerCase();
@@ -5928,22 +6098,309 @@ useEffect(() => {
     return `${message.createdBy || 'Система'} · ${role}`;
   }
 
+  function buildAssistantReply(input: string) {
+    const normalized = input.trim().toLowerCase();
+    const exactOrder = findExactOrderMatch(orders, input);
+    const exactClient = findExactClientMatch(customerList, input);
+    const readyWords = ['готов', 'видач'];
+    const debtWords = ['борг', 'долг', 'не оплат', 'неоплат'];
+    const repairWords = ['в ремонті', 'в ремонте', 'ремонт'];
+    const acceptWords = ['прийнят', 'принят', 'нове замовлення', 'новый заказ'];
+    const clientWords = ['клієнт', 'клиент', 'номер', 'телефон'];
+    const stockWords = ['склад', 'товар', 'запчаст'];
+    const profitWords = ['прибут', 'прибыл'];
+    const paymentWords = ['оплат'];
+    const issueWords = ['видат', 'выдат'];
+    const helpWords = ['як', 'как', 'де', 'где', 'що', 'что', 'покажи', 'показать', 'відкрий', 'открой', 'open', 'знайди', 'найди'];
+
+    if (exactOrder) {
+      return {
+        title: 'AI: знайдено замовлення',
+        text: `Знайшов ${exactOrder.id}. Можу відкрити його в робочій картці без переходів вручну.`,
+        context: `${assistantContextSummary}${assistantSelectedOrder ? ` · активне ${assistantSelectedOrder.id}` : ''}`,
+        actions: [{ label: 'Відкрити замовлення', tone: 'primary' as const, run: () => openAssistantOrder(exactOrder.id) }],
+      };
+    }
+
+    if (exactClient) {
+      return {
+        title: 'AI: знайдено клієнта',
+        text: `Є точний збіг по клієнту ${exactClient.name}. Можу одразу відкрити його картку.`,
+        context: assistantContextSummary,
+        actions: [{ label: 'Відкрити клієнта', tone: 'primary' as const, run: () => openAssistantClient(exactClient.phone, exactClient.name) }],
+      };
+    }
+
+    if (debtWords.some((word) => normalized.includes(word))) {
+      if (viewUser.role === 'Менеджер') {
+        return {
+          title: 'AI: замовлення з боргом',
+          text: 'Для менеджера відкрию робочий список замовлень, де потрібна оплата або контроль боргу.',
+          context: assistantContextSummary,
+          actions: [{ label: 'Показати борги', tone: 'primary' as const, run: () => requestAssistantDashboardFilter('Борг') }],
+        };
+      }
+      if (canViewPage('finance')) {
+        return {
+          title: 'AI: фінансовий контроль',
+          text: 'Розділ фінансів містить борги клієнтів, оплату, касу та повʼязані фінансові сигнали.',
+          context: assistantContextSummary,
+          actions: [{ label: 'Відкрити фінанси', tone: 'primary' as const, run: () => setPage('finance') }],
+        };
+      }
+      return {
+        title: 'AI: доступ за роллю',
+        text: `Для ролі ${roleDisplay(viewUser.role)} повний фінансовий блок прихований. Можу підказати робочі дії саме у вашому розділі.`,
+        context: assistantContextSummary,
+      };
+    }
+
+    if (readyWords.some((word) => normalized.includes(word))) {
+      if (viewUser.role === 'Менеджер') {
+        return {
+          title: 'AI: готові до видачі',
+          text: 'Покажу менеджеру замовлення, які вже можна доводити до видачі або контролювати перед видачею.',
+          context: assistantContextSummary,
+          actions: [{ label: 'Показати готові', tone: 'primary' as const, run: () => requestAssistantDashboardFilter('Готово') }],
+        };
+      }
+      return {
+        title: 'AI: контроль готових замовлень',
+        text: 'Відкрийте стрічку замовлень і перевірте статус "Готовий до видачі". За потреби я підкажу наступний крок.',
+        context: assistantContextSummary,
+        actions: canViewPage('orders') ? [{ label: 'Відкрити замовлення', tone: 'primary' as const, run: () => setPage('orders') }] : undefined,
+      };
+    }
+
+    if (repairWords.some((word) => normalized.includes(word))) {
+      if (viewUser.role === 'Менеджер') {
+        return {
+          title: 'AI: активний ремонт',
+          text: 'Покажу замовлення, що зараз знаходяться у ремонті та потребують менеджерського контролю.',
+          context: assistantContextSummary,
+          actions: [{ label: 'Показати ремонт', tone: 'primary' as const, run: () => requestAssistantDashboardFilter('В ремонті') }],
+        };
+      }
+      if (viewUser.role === 'Інженер') {
+        return {
+          title: 'AI: ваші активні ремонти',
+          text: 'Для інженера головний робочий список знаходиться в "Мої замовлення". Саме там видно поточні ремонти.',
+          context: assistantContextSummary,
+          actions: [{ label: 'Відкрити мої замовлення', tone: 'primary' as const, run: () => setPage('my-orders') }],
+        };
+      }
+    }
+
+    if (stockWords.some((word) => normalized.includes(word))) {
+      if (canViewPage('parts')) {
+        return {
+          title: 'AI: склад і залишки',
+          text: 'Основний робочий розділ складу — це "Склад". Там видно залишки, партії, резерви та рух товару.',
+          context: assistantContextSummary,
+          actions: [{ label: 'Відкрити склад', tone: 'primary' as const, run: () => setPage('parts') }],
+        };
+      }
+      return {
+        title: 'AI: доступ обмежено',
+        text: `Роль ${roleDisplay(viewUser.role)} не має доступу до складу. Якщо потрібно, я можу пояснити робочий маршрут у доступних вам розділах.`,
+        context: assistantContextSummary,
+      };
+    }
+
+    if (profitWords.some((word) => normalized.includes(word))) {
+      if (canViewPage('finance') && canDo('profit.view')) {
+        return {
+          title: 'AI: прибуток і фінанси',
+          text: 'Прибуток, витрати та борги зібрані у фінансовому блоці. Там же видно зведення по бізнесу.',
+          context: assistantContextSummary,
+          actions: [{ label: 'Відкрити фінанси', tone: 'primary' as const, run: () => setPage('finance') }],
+        };
+      }
+      return {
+        title: 'AI: доступ за роллю',
+        text: 'Повний перегляд прибутку доступний не для всіх ролей. Я не змінюю права, але можу підказати, де дивитися робочі показники у вашому модулі.',
+        context: assistantContextSummary,
+      };
+    }
+
+    if (acceptWords.some((word) => normalized.includes(word)) || (helpWords.some((word) => normalized.includes(word)) && normalized.includes('замовлен'))) {
+      return {
+        title: 'AI-наставник: як прийняти замовлення',
+        text: 'Ось короткий робочий сценарій для прийому нового замовлення без звернення до адміністратора.',
+        context: assistantContextSummary,
+        steps: [
+          'Натисніть "Нове замовлення".',
+          'Введіть телефон клієнта та перевірте, чи він уже є в базі.',
+          'Заповніть пристрій, проблему та коментар прийому.',
+          'Призначте інженера або залиште замовлення на первинний контроль.',
+          'Натисніть "Зберегти замовлення".',
+        ],
+        actions: [{ label: 'Нове замовлення', tone: 'primary' as const, run: () => openAssistantCreateOrder() }],
+      };
+    }
+
+    if (paymentWords.some((word) => normalized.includes(word)) && helpWords.some((word) => normalized.includes(word))) {
+      return {
+        title: 'AI-наставник: як оформити оплату',
+        text: 'Оплату краще проводити прямо з робочої картки замовлення або швидкою кнопкою у списку.',
+        context: assistantContextSummary,
+        steps: [
+          'Знайдіть потрібне замовлення через пошук або список.',
+          'Натисніть "Оплата" у рядку або відкрийте картку замовлення.',
+          'Вкажіть суму та спосіб оплати.',
+          'Підтвердьте платіж і перевірте, чи закрився борг.',
+        ],
+        actions: assistantSelectedOrder ? [{ label: `Відкрити ${assistantSelectedOrder.id}`, tone: 'primary' as const, run: () => openAssistantOrder(assistantSelectedOrder.id) }] : undefined,
+      };
+    }
+
+    if (issueWords.some((word) => normalized.includes(word)) && helpWords.some((word) => normalized.includes(word))) {
+      return {
+        title: 'AI-наставник: як видати пристрій',
+        text: 'Видача відбувається тільки з картки замовлення після перевірки готовності та закриття боргу.',
+        context: assistantContextSummary,
+        steps: [
+          'Знайдіть замовлення через пошук або список "Готово".',
+          'Відкрийте картку замовлення.',
+          'Перевірте статус, оплату та акт.',
+          'Натисніть "Видати", якщо CRM не показує блокуючих причин.',
+        ],
+        actions: assistantSelectedOrder ? [{ label: `Відкрити ${assistantSelectedOrder.id}`, tone: 'primary' as const, run: () => openAssistantOrder(assistantSelectedOrder.id) }] : undefined,
+      };
+    }
+
+    if (clientWords.some((word) => normalized.includes(word)) && helpWords.some((word) => normalized.includes(word))) {
+      return {
+        title: 'AI-наставник: як знайти клієнта',
+        text: 'Клієнтів зручно шукати за телефоном, імʼям, компанією або кодом ЄДРПОУ.',
+        context: assistantContextSummary,
+        steps: [
+          'Введіть телефон або імʼя клієнта.',
+          'Якщо є точний збіг, я зможу відкрити картку клієнта.',
+          'Для деталізації переходьте в розділ "Клієнти".',
+        ],
+        actions: canViewPage('clients') ? [{ label: 'Відкрити клієнтів', tone: 'primary' as const, run: () => setPage('clients') }] : undefined,
+      };
+    }
+
+    if (viewUser.role === 'Менеджер' && input.trim()) {
+      return {
+        title: 'AI: робоча команда менеджера',
+        text: 'Можу шукати замовлення, підказувати дії та відкривати фінансові або клієнтські сценарії. Спробуйте: "відкрий заказ 1047", "покажи борги", "що готово до видачі".',
+        context: assistantContextSummary,
+        actions: [{ label: 'Знайти у замовленнях', tone: 'secondary' as const, run: () => requestAssistantDashboardSearch(input.trim()) }],
+      };
+    }
+
+    return {
+      title: 'AI Operational Assistant',
+      text: `Я бачу ваш контекст: ${assistantContextSummary}. Питайте про дії в CRM, пошук клієнтів, замовлення, оплату, склад або навчання нових співробітників.`,
+      context: assistantContextSummary,
+    };
+  }
+
+  function extractAssistantHistory(messages: AssistantMessage[]) {
+    return messages.slice(-10).map((message) => ({
+      author: message.author,
+      text: [
+        message.title || '',
+        message.text,
+        ...(message.steps ?? []),
+      ].filter(Boolean).join('\n'),
+    }));
+  }
+
+  function parseAssistantReply(rawText: string) {
+    const normalizedText = String(rawText || '').trim();
+    if (!normalizedText) {
+      return {
+        title: 'AI Assistant',
+        text: 'AI временно недоступен. Попробуйте позже.',
+        steps: undefined as string[] | undefined,
+      };
+    }
+    const lines = normalizedText
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const numberedSteps = lines.filter((line) => /^\d+\.\s+/.test(line)).map((line) => line.replace(/^\d+\.\s+/, '').trim());
+    const plainLines = lines.filter((line) => !/^\d+\.\s+/.test(line));
+    const firstLine = plainLines[0] ?? '';
+    const title = firstLine.endsWith(':') && firstLine.length <= 72 ? firstLine.slice(0, -1).trim() : 'AI Assistant';
+    const text = title === 'AI Assistant'
+      ? plainLines.join(' ')
+      : plainLines.slice(1).join(' ') || firstLine;
+    return {
+      title,
+      text: text || normalizedText,
+      steps: numberedSteps.length > 0 ? numberedSteps : undefined,
+    };
+  }
+
+  async function submitAssistantCommand() {
+    const input = assistantInput.trim();
+    if (!input || isAssistantLoading) return;
+    const userMessage: AssistantMessage = {
+      id: uid('AI'),
+      author: 'user',
+      text: input,
+      context: assistantContextSummary,
+      createdAt: assistantTimestamp(),
+    };
+    pushAssistantMessages([userMessage]);
+    setAssistantInput('');
+    setIsAssistantVisible(true);
+    setIsAssistantCollapsed(false);
+    setIsAssistantLoading(true);
+    try {
+      const response = await fetch('/api/ai', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Requested-With': 'CRM-AI-Sidebar',
+        },
+        body: JSON.stringify({
+          message: input,
+          history: extractAssistantHistory(assistantMessages),
+          context: assistantApiContext,
+        }),
+      });
+      const payload = await response.json().catch(() => ({} as { message?: string; reply?: string }));
+      if (!response.ok) {
+        throw new Error(payload.message || payload.reply || 'AI временно недоступен. Попробуйте позже.');
+      }
+      const parsed = parseAssistantReply(String(payload.reply || ''));
+      pushAssistantMessages([{
+        id: uid('AI'),
+        author: 'assistant',
+        title: parsed.title,
+        text: parsed.text,
+        steps: parsed.steps,
+        context: assistantContextSummary,
+        createdAt: assistantTimestamp(),
+      }]);
+    } catch (error) {
+      const message = error instanceof Error && error.message
+        ? error.message
+        : 'AI временно недоступен. Попробуйте позже.';
+      pushAssistantMessages([{
+        id: uid('AI'),
+        author: 'assistant',
+        title: 'AI Assistant',
+        text: message,
+        context: assistantContextSummary,
+        createdAt: assistantTimestamp(),
+      }]);
+    } finally {
+      setIsAssistantLoading(false);
+    }
+  }
+
   function openOrderFromNotification(message: InternalMessage) {
     if (!message.orderId) return;
     if (message.status === 'Нове') updateInternalMessageStatus(message.id, 'Прочитано');
     setIsNotificationsOpen(false);
-    setShowMenu(false);
-    setDashboardFocus(null);
-    setSelectedOrderId(message.orderId);
-    if (viewUser.role === 'Менеджер') {
-      setPage('dashboard');
-      return;
-    }
-    if (viewUser.role === 'Інженер') {
-      setPage('my-orders');
-      return;
-    }
-    setPage('orders');
+    openAssistantOrder(message.orderId);
   }
 
   function productName(productId: string) {
@@ -11085,6 +11542,26 @@ useEffect(() => {
               <ShieldCheck size={18} />
             </button>
           )}
+          <button
+            className={`icon-button assistant-toggle-button${isAssistantVisible ? ' assistant-toggle-button-active' : ''}`}
+            type="button"
+            onClick={() => {
+              if (!isAssistantVisible) {
+                setIsAssistantVisible(true);
+                setIsAssistantCollapsed(false);
+                return;
+              }
+              if (isAssistantCollapsed) {
+                setIsAssistantCollapsed(false);
+                return;
+              }
+              setIsAssistantVisible(false);
+            }}
+            aria-label="AI-помічник CRM"
+            title="AI-помічник CRM"
+          >
+            AI
+          </button>
           <button className="icon-button" style={{ marginLeft: 'auto' }} type="button" onClick={logoutEmployee} aria-label="Вийти" title="Вийти">
             <LogOut size={18} />
           </button>
@@ -11144,117 +11621,119 @@ useEffect(() => {
         </nav>
 
         <ToastStack toasts={toasts} onDismiss={(id) => setToasts((current) => current.filter((toast) => toast.id !== id))} />
-
-        {!canViewPage(page) && <AccessDenied activeUser={viewUser} page={page} />}
-        {canViewPage(page) && page === 'dashboard' && viewUser.role === 'Менеджер' && (
-          <OrdersPage
-            orders={repairOrders}
-            allOrders={orders}
-            selectedOrder={selectedRepairOrder}
-            products={products}
-            selectedOrderId={selectedOrderId}
-            setSelectedOrderId={setSelectedOrderId}
-            selectedProductId={selectedProductId}
-            setSelectedProductId={setSelectedProductId}
-            qty={qty}
-            setQty={setQty}
-            quickPhone={quickPhone}
-            quickClientDebtWarning={quickClientDebtWarning}
-            quickClientName={quickClientName}
-            quickDevice={quickDevice}
-            quickSerial={quickSerial}
-            quickProblem={quickProblem}
-            quickAppearance={quickAppearance}
-            quickEstimatedAmount={quickEstimatedAmount}
-            quickEngineerId={quickEngineerId}
-            quickContractId={quickContractId}
-            quickLocationCode={quickLocationCode}
-            quickComment={quickComment}
-            users={users}
-            contracts={contracts}
-            contractActs={contractActs}
-            bankImportItems={bankImportItems}
-            setQuickPhone={handleQuickPhoneChange}
-            setQuickClientName={setQuickClientName}
-            setQuickDevice={setQuickDevice}
-            setQuickSerial={setQuickSerial}
-            setQuickProblem={setQuickProblem}
-            setQuickAppearance={setQuickAppearance}
-            setQuickEstimatedAmount={setQuickEstimatedAmount}
-            setQuickEngineerId={setQuickEngineerId}
-            setQuickContractId={setQuickContractId}
-            setQuickLocationCode={setQuickLocationCode}
-            setQuickComment={setQuickComment}
-            createQuickOrder={createQuickOrder}
-            openQuickOrderRequest={openQuickOrderRequest}
-            patchSimpleManagerOrder={patchSimpleManagerOrder}
-            updateSimpleManagerOrderStatus={updateSimpleManagerOrderStatus}
-            editSimpleManagerOrder={editSimpleManagerOrder}
-            addSimpleManagerOrderPart={addSimpleManagerOrderPart}
-            removeSimpleManagerOrderPart={removeSimpleManagerOrderPart}
-            acceptSimpleManagerPayment={acceptSimpleManagerPayment}
-            confirmSimpleManagerPayment={confirmBankPayment}
-            accountSimpleManagerOrderToContract={accountSimpleManagerOrderToContract}
-            customerList={customerList}
-            addPartToRepair={addPartToRepair}
-            orderPart={orderPart}
-            reserveArrived={reserveArrived}
-            issueToEngineer={issueToEngineer}
-            markInstalled={markInstalled}
-            returnServicePart={returnServicePart}
-            addOrderPayment={addOrderPayment}
-            changeOrderStatus={changeOrderStatus}
-            acceptOrderWork={acceptOrderWork}
-            returnOrderToCellReady={returnOrderToCellReady}
-            reassignEngineer={reassignEngineer}
-            closeOrder={closeOrder}
-            issueReadyOrder={issueReadyOrder}
-            oneClickManagerIssue={oneClickManagerIssue}
-            transferOrderToBas={transferOrderToBas}
-            printDocument={printDocument}
-            createServiceOrderDocument={createServiceOrderDocument}
-            printServiceOrderDocument={printServiceOrderDocument}
-            documents={documents}
-            taxInvoices={taxInvoices}
-            notifications={clientNotifications.filter((item) => item.orderId === selectedRepairOrder.id)}
-            allNotifications={clientNotifications}
-            orderUnits={orderUnits}
-            warehouseLocations={warehouseLocations}
-            orderMovementLogs={orderMovementLogs}
-            moveOrder={moveOrder}
-            sendClientNotification={enqueueClientNotification}
-            createNotificationDraft={createNotificationDraft}
-            approval={repairApprovals.find((item) => item.orderId === selectedRepairOrder.id)}
-            sendRepairApproval={sendRepairApproval}
-            recordApprovalResponse={recordApprovalResponse}
-            markApprovalNoAnswer={markApprovalNoAnswer}
-            logRiskConfirmation={logRiskConfirmation}
-            ensureOrderDocumentRecord={ensureOrderDocumentRecord}
-            logOrderDocumentPrint={logOrderDocumentPrint}
-            signOrderAct={signOrderAct}
-            createTaxInvoiceForOrder={createTaxInvoiceForOrder}
-            registerTaxInvoice={registerTaxInvoice}
-            markEngineerWorkCompleted={markEngineerWorkCompleted}
-            cancelOrder={cancelOrder}
-            refundOrder={refundOrder}
-            cancelOrderAct={cancelOrderAct}
-            reopenOrder={reopenOrder}
-            openClientRecord={(phone, search) => {
-              setGlobalFocusedClientPhone(phone);
-              setGlobalClientSearch(search ?? '');
-              stayOnCurrentPage();
-            }}
-            orderVersions={orderVersions}
-            suggestedDocumentAction={suggestedDocumentAction}
-            clearSuggestedDocumentAction={() => setSuggestedDocumentAction(null)}
-            dashboardFocus={dashboardFocus}
-            clearDashboardFocus={() => setDashboardFocus(null)}
-            notifyUser={setNotice}
-            canDo={canDo}
-            showCost={canDo('cost.view')}
-            activeUser={viewUser}
-          />
-        )}
+        <div className={`workspace-body${isAssistantVisible ? ' workspace-body-with-assistant' : ''}${isAssistantVisible && isAssistantCollapsed ? ' workspace-body-assistant-collapsed' : ''}`}>
+          <div className="workspace-content">
+            {!canViewPage(page) && <AccessDenied activeUser={viewUser} page={page} />}
+            {canViewPage(page) && page === 'dashboard' && viewUser.role === 'Менеджер' && (
+              <OrdersPage
+                orders={repairOrders}
+                allOrders={orders}
+                selectedOrder={selectedRepairOrder}
+                products={products}
+                selectedOrderId={selectedOrderId}
+                setSelectedOrderId={setSelectedOrderId}
+                selectedProductId={selectedProductId}
+                setSelectedProductId={setSelectedProductId}
+                qty={qty}
+                setQty={setQty}
+                quickPhone={quickPhone}
+                quickClientDebtWarning={quickClientDebtWarning}
+                quickClientName={quickClientName}
+                quickDevice={quickDevice}
+                quickSerial={quickSerial}
+                quickProblem={quickProblem}
+                quickAppearance={quickAppearance}
+                quickEstimatedAmount={quickEstimatedAmount}
+                quickEngineerId={quickEngineerId}
+                quickContractId={quickContractId}
+                quickLocationCode={quickLocationCode}
+                quickComment={quickComment}
+                users={users}
+                contracts={contracts}
+                contractActs={contractActs}
+                bankImportItems={bankImportItems}
+                setQuickPhone={handleQuickPhoneChange}
+                setQuickClientName={setQuickClientName}
+                setQuickDevice={setQuickDevice}
+                setQuickSerial={setQuickSerial}
+                setQuickProblem={setQuickProblem}
+                setQuickAppearance={setQuickAppearance}
+                setQuickEstimatedAmount={setQuickEstimatedAmount}
+                setQuickEngineerId={setQuickEngineerId}
+                setQuickContractId={setQuickContractId}
+                setQuickLocationCode={setQuickLocationCode}
+                setQuickComment={setQuickComment}
+                createQuickOrder={createQuickOrder}
+                openQuickOrderRequest={openQuickOrderRequest}
+                patchSimpleManagerOrder={patchSimpleManagerOrder}
+                updateSimpleManagerOrderStatus={updateSimpleManagerOrderStatus}
+                editSimpleManagerOrder={editSimpleManagerOrder}
+                addSimpleManagerOrderPart={addSimpleManagerOrderPart}
+                removeSimpleManagerOrderPart={removeSimpleManagerOrderPart}
+                acceptSimpleManagerPayment={acceptSimpleManagerPayment}
+                confirmSimpleManagerPayment={confirmBankPayment}
+                accountSimpleManagerOrderToContract={accountSimpleManagerOrderToContract}
+                customerList={customerList}
+                addPartToRepair={addPartToRepair}
+                orderPart={orderPart}
+                reserveArrived={reserveArrived}
+                issueToEngineer={issueToEngineer}
+                markInstalled={markInstalled}
+                returnServicePart={returnServicePart}
+                addOrderPayment={addOrderPayment}
+                changeOrderStatus={changeOrderStatus}
+                acceptOrderWork={acceptOrderWork}
+                returnOrderToCellReady={returnOrderToCellReady}
+                reassignEngineer={reassignEngineer}
+                closeOrder={closeOrder}
+                issueReadyOrder={issueReadyOrder}
+                oneClickManagerIssue={oneClickManagerIssue}
+                transferOrderToBas={transferOrderToBas}
+                printDocument={printDocument}
+                createServiceOrderDocument={createServiceOrderDocument}
+                printServiceOrderDocument={printServiceOrderDocument}
+                documents={documents}
+                taxInvoices={taxInvoices}
+                notifications={clientNotifications.filter((item) => item.orderId === selectedRepairOrder.id)}
+                allNotifications={clientNotifications}
+                orderUnits={orderUnits}
+                warehouseLocations={warehouseLocations}
+                orderMovementLogs={orderMovementLogs}
+                moveOrder={moveOrder}
+                sendClientNotification={enqueueClientNotification}
+                createNotificationDraft={createNotificationDraft}
+                approval={repairApprovals.find((item) => item.orderId === selectedRepairOrder.id)}
+                sendRepairApproval={sendRepairApproval}
+                recordApprovalResponse={recordApprovalResponse}
+                markApprovalNoAnswer={markApprovalNoAnswer}
+                logRiskConfirmation={logRiskConfirmation}
+                ensureOrderDocumentRecord={ensureOrderDocumentRecord}
+                logOrderDocumentPrint={logOrderDocumentPrint}
+                signOrderAct={signOrderAct}
+                createTaxInvoiceForOrder={createTaxInvoiceForOrder}
+                registerTaxInvoice={registerTaxInvoice}
+                markEngineerWorkCompleted={markEngineerWorkCompleted}
+                cancelOrder={cancelOrder}
+                refundOrder={refundOrder}
+                cancelOrderAct={cancelOrderAct}
+                reopenOrder={reopenOrder}
+                openClientRecord={(phone, search) => {
+                  setGlobalFocusedClientPhone(phone);
+                  setGlobalClientSearch(search ?? '');
+                  stayOnCurrentPage();
+                }}
+                orderVersions={orderVersions}
+                suggestedDocumentAction={suggestedDocumentAction}
+                clearSuggestedDocumentAction={() => setSuggestedDocumentAction(null)}
+                dashboardFocus={dashboardFocus}
+                clearDashboardFocus={() => setDashboardFocus(null)}
+                notifyUser={setNotice}
+                assistantDashboardRequest={assistantDashboardRequest}
+                canDo={canDo}
+                showCost={canDo('cost.view')}
+                activeUser={viewUser}
+              />
+            )}
         {canViewPage(page) && page === 'dashboard' && viewUser.role !== 'Менеджер' && (
           <Dashboard
             analytics={analytics}
@@ -11475,6 +11954,7 @@ useEffect(() => {
             dashboardFocus={dashboardFocus}
             clearDashboardFocus={() => setDashboardFocus(null)}
             notifyUser={setNotice}
+            assistantDashboardRequest={assistantDashboardRequest}
             canDo={canDo}
             showCost={canDo('cost.view')}
             activeUser={viewUser}
@@ -11580,6 +12060,7 @@ useEffect(() => {
             dashboardFocus={dashboardFocus}
             clearDashboardFocus={() => setDashboardFocus(null)}
             notifyUser={setNotice}
+            assistantDashboardRequest={assistantDashboardRequest}
             canDo={canDo}
             showCost={canDo('cost.view')}
             activeUser={viewUser}
@@ -11685,9 +12166,104 @@ useEffect(() => {
             importBackupFile={importBackupFile}
           />
         )}
-        <footer style={{ marginTop: '24px', padding: '16px 0 8px', color: '#64748b', fontSize: '14px' }}>
-          Контакт: {companySettings.mainEmail}
-        </footer>
+            <footer style={{ marginTop: '24px', padding: '16px 0 8px', color: '#64748b', fontSize: '14px' }}>
+              Контакт: {companySettings.mainEmail}
+            </footer>
+          </div>
+          {isAssistantVisible && (
+            <aside className={`workspace-assistant${isAssistantCollapsed ? ' workspace-assistant-collapsed' : ''}`} aria-label="Глобальний AI-помічник CRM">
+              <div className="workspace-assistant-panel">
+                {isAssistantCollapsed ? (
+                  <button
+                    type="button"
+                    className="workspace-assistant-tab"
+                    onClick={() => setIsAssistantCollapsed(false)}
+                    aria-label="Розгорнути AI Assistant"
+                  >
+                    <strong>AI</strong>
+                    <span>Розгорнути</span>
+                  </button>
+                ) : (
+                  <>
+                    <div className="workspace-assistant-head">
+                      <div className="workspace-assistant-title">
+                        <strong>AI Assistant</strong>
+                        <span>{assistantContextSummary}</span>
+                      </div>
+                      <div className="workspace-assistant-head-actions">
+                        <button type="button" className="workspace-assistant-head-button" onClick={() => setIsAssistantCollapsed(true)}>
+                          Згорнути
+                        </button>
+                        <button type="button" className="workspace-assistant-head-button" onClick={() => setIsAssistantVisible(false)}>
+                          Сховати
+                        </button>
+                      </div>
+                    </div>
+                    <div className="workspace-assistant-context">
+                      <span>Роль: {roleDisplay(viewUser.role)}</span>
+                      <span>Розділ: {assistantPageLabel}</span>
+                      {assistantSelectedOrder && <span>Заказ: {assistantSelectedOrder.id}</span>}
+                    </div>
+                    <div className="workspace-assistant-log" ref={assistantLogRef}>
+                      {assistantMessages.map((message) => (
+                        <article key={message.id} className={`assistant-message assistant-message-${message.author}`}>
+                          {message.title && <strong>{message.title}</strong>}
+                          <p>{message.text}</p>
+                          {message.steps && (
+                            <ol className="assistant-message-steps">
+                              {message.steps.map((step) => <li key={step}>{step}</li>)}
+                            </ol>
+                          )}
+                          {message.actions && message.actions.length > 0 && (
+                            <div className="assistant-message-actions">
+                              {message.actions.map((action) => (
+                                <button key={`${message.id}-${action.label}`} type="button" className={action.tone === 'secondary' ? 'assistant-action-secondary' : 'assistant-action-primary'} onClick={action.run}>
+                                  {action.label}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                          <small>{message.context || assistantContextSummary} · {message.createdAt}</small>
+                        </article>
+                      ))}
+                      {isAssistantLoading && (
+                        <article className="assistant-message assistant-message-assistant assistant-message-loading">
+                          <strong>AI Assistant</strong>
+                          <p>Думаю над відповіддю…</p>
+                          <small>{assistantContextSummary} · {assistantTimestamp()}</small>
+                        </article>
+                      )}
+                      <div ref={assistantEndRef} />
+                    </div>
+                    <div className="workspace-assistant-composer">
+                      <textarea
+                        value={assistantInput}
+                        onChange={(event) => setAssistantInput(event.target.value)}
+                        disabled={isAssistantLoading}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' && !event.shiftKey) {
+                            event.preventDefault();
+                            submitAssistantCommand();
+                          }
+                        }}
+                        placeholder="Що потрібно зробити? Пошук, клієнт, замовлення, дія…"
+                        rows={4}
+                      />
+                      <div className="workspace-assistant-compose-actions">
+                        <button type="button" className="assistant-action-secondary" onClick={() => setAssistantMessages((current) => current.slice(-1))} disabled={isAssistantLoading}>
+                          Очистити історію
+                        </button>
+                        <button type="button" className="assistant-action-primary" onClick={submitAssistantCommand} disabled={isAssistantLoading || !assistantInput.trim()}>
+                          {isAssistantLoading ? 'Надсилаю…' : 'Надіслати'}
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            </aside>
+          )}
+        </div>
       </main>
     </div>
   );
@@ -13974,6 +14550,7 @@ function OrdersPage(props: {
   clearDashboardFocus: () => void;
   notifyUser: (message: string) => void;
   openQuickOrderRequest?: number;
+  assistantDashboardRequest?: AssistantDashboardRequest | null;
   canDo: (permission: Permission) => boolean;
   showCost: boolean;
   activeUser: User;
@@ -13989,7 +14566,7 @@ function OrdersPage(props: {
     return '🧾';
   };
   const [managerSearch, setManagerSearch] = useState('');
-  const [managerFilter, setManagerFilter] = useState<'none' | 'all' | 'Прийнято' | 'В ремонті' | 'Готово' | 'Видано' | 'Борг' | 'Очікує оплату'>('none');
+  const [managerFilter, setManagerFilter] = useState<ManagerDashboardFilter>('none');
   const [showManagerCreateForm, setShowManagerCreateForm] = useState(false);
   const [addingPartOrderId, setAddingPartOrderId] = useState('');
   const [partSearch, setPartSearch] = useState('');
@@ -14006,6 +14583,7 @@ function OrdersPage(props: {
   const managerPaymentAmountInputRef = useRef<HTMLInputElement | null>(null);
   const lastOpenQuickOrderRequestRef = useRef(props.openQuickOrderRequest ?? 0);
   const lastSyncedSelectedOrderIdRef = useRef(props.selectedOrderId);
+  const lastAssistantDashboardRequestRef = useRef(props.assistantDashboardRequest?.id ?? 0);
 
   useEffect(() => {
     if (!props.openQuickOrderRequest) return;
@@ -14016,6 +14594,23 @@ function OrdersPage(props: {
     setIsManagerOrderDetailOpen(false);
     setManagerPostPaymentOrderId('');
   }, [props.openQuickOrderRequest]);
+  useEffect(() => {
+    if (!isManager) return;
+    if (!props.assistantDashboardRequest?.id) return;
+    if (props.assistantDashboardRequest.id === lastAssistantDashboardRequestRef.current) return;
+    lastAssistantDashboardRequestRef.current = props.assistantDashboardRequest.id;
+    setShowManagerCreateForm(false);
+    setIsManagerOrderDetailOpen(false);
+    setManagerPostPaymentOrderId('');
+    if (props.assistantDashboardRequest.mode === 'filter' && props.assistantDashboardRequest.filter) {
+      setManagerSearch('');
+      setManagerFilter(props.assistantDashboardRequest.filter);
+    }
+    if (props.assistantDashboardRequest.mode === 'search') {
+      setManagerFilter('none');
+      setManagerSearch(props.assistantDashboardRequest.query ?? '');
+    }
+  }, [isManager, props.assistantDashboardRequest]);
   const roleOrders = props.allRoleOrders ?? props.orders;
   const managerSourceOrders = props.allRoleOrders ?? props.allOrders;
   const managerEngineers = props.users.filter((user) => user.role === 'Інженер');
@@ -14050,6 +14645,9 @@ function OrdersPage(props: {
   const hasActiveManagerFilter = managerFilter !== 'none';
   const managerBaseOrders = [...managerSourceOrders]
     .filter((order) => !['Скасовано', 'Закрито'].includes(order.status));
+  const managerOperationalOrders = [...managerBaseOrders]
+    .sort((a, b) => managerOrderPriorityScore(b) - managerOrderPriorityScore(a) || (parseDateTime(b.createdAt ?? b.intakeDate)?.getTime() ?? 0) - (parseDateTime(a.createdAt ?? a.intakeDate)?.getTime() ?? 0))
+    .slice(0, 8);
   const managerVisibleOrders = managerBaseOrders
     .filter((order) => {
       if (hasManagerSearch) return matchesOrderSearch(order, managerSearch);
@@ -14345,27 +14943,167 @@ function OrdersPage(props: {
       setManagerIssueModal(null);
     };
 
-    const managerSearchResults = managerVisibleOrders;
-    const managerSearchExactOrder = findExactOrderMatch(managerSourceOrders, managerSearch);
-    const managerSearchMatchedClient = managerSearchExactOrder ? null : findClientBySearch(props.customerList, managerSearch);
-    const existingClientByPhone = props.quickPhone.trim()
-      ? props.customerList.find((client) => extractDigits(client.phone) === extractDigits(props.quickPhone))
-      : null;
+  const managerSearchResults = managerVisibleOrders;
+  const managerSearchExactOrder = findExactOrderMatch(managerSourceOrders, managerSearch);
+  const managerSearchMatchedClient = managerSearchExactOrder ? null : findClientBySearch(props.customerList, managerSearch);
+  const existingClientByPhone = props.quickPhone.trim()
+    ? props.customerList.find((client) => extractDigits(client.phone) === extractDigits(props.quickPhone))
+    : null;
+  const normalizedManagerCommand = normalizeLooseText(managerSearch);
 
-    const openManagerOrderFromSearch = (order: ServiceOrder) => {
-      setManagerFilter('all');
-      openManagerOrderDetails(order.id);
-      setManagerSearch(order.id);
-      setShowManagerCreateForm(false);
-      pulseManagerOrder(order.id);
+  const openManagerOrderFromSearch = (order: ServiceOrder) => {
+    setManagerFilter('all');
+    openManagerOrderDetails(order.id);
+    setManagerSearch(order.id);
+    setShowManagerCreateForm(false);
+    pulseManagerOrder(order.id);
+  };
+
+  const managerAiResponse = (() => {
+    const needle = managerSearch.trim();
+    if (!needle) return null;
+    const openWords = ['відкрий', 'открой', 'open'];
+    const debtWords = ['борг', 'долг', 'не оплат', 'неоплат'];
+    const readyWords = ['готов', 'видати', 'выдать', 'видач'];
+    const repairWords = ['в ремонті', 'в ремонте', 'ремонт'];
+    const acceptedWords = ['прийнято', 'принято', 'прийом', 'прием'];
+    const clientWords = ['клієнт', 'клиент', 'телефон', 'номер'];
+    const howWords = ['як', 'как', 'help', 'допом'];
+
+    if (managerSearchExactOrder && openWords.some((word) => normalizedManagerCommand.includes(word))) {
+      return {
+        title: 'AI: відкриття замовлення',
+        summary: `Знайшов ${managerSearchExactOrder.id}. Можу відкрити його одразу у робочій картці.`,
+        actionLabel: 'Відкрити замовлення',
+        run: () => openManagerOrderFromSearch(managerSearchExactOrder),
+      };
+    }
+
+    if (debtWords.some((word) => normalizedManagerCommand.includes(word))) {
+      return {
+        title: 'AI: фінансовий фокус',
+        summary: 'Показати замовлення з боргами менеджеру.',
+        actionLabel: 'Показати борги',
+        run: () => {
+          setManagerFilter('Борг');
+          setManagerSearch('');
+        },
+      };
+    }
+
+    if (readyWords.some((word) => normalizedManagerCommand.includes(word))) {
+      return {
+        title: 'AI: готові до видачі',
+        summary: 'Відкрию замовлення, які менеджеру потрібно видати або довести до видачі.',
+        actionLabel: 'Показати готові',
+        run: () => {
+          setManagerFilter('Готово');
+          setManagerSearch('');
+        },
+      };
+    }
+
+    if (repairWords.some((word) => normalizedManagerCommand.includes(word))) {
+      return {
+        title: 'AI: активний ремонт',
+        summary: 'Відкрию замовлення, які зараз знаходяться у ремонті.',
+        actionLabel: 'Показати ремонт',
+        run: () => {
+          setManagerFilter('В ремонті');
+          setManagerSearch('');
+        },
+      };
+    }
+
+    if (acceptedWords.some((word) => normalizedManagerCommand.includes(word))) {
+      return {
+        title: 'AI: новий прийом',
+        summary: 'Покажу щойно прийняті замовлення, які чекають наступного кроку менеджера.',
+        actionLabel: 'Показати прийняті',
+        run: () => {
+          setManagerFilter('Прийнято');
+          setManagerSearch('');
+        },
+      };
+    }
+
+    if (howWords.some((word) => normalizedManagerCommand.includes(word)) && normalizedManagerCommand.includes('прийня')) {
+      return {
+        title: 'AI-наставник: як прийняти замовлення',
+        summary: 'CRM підкаже короткий робочий сценарій без звернення до адміністратора.',
+        steps: [
+          'Натисніть "Нове замовлення".',
+          'Введіть телефон клієнта і перевірте, чи він уже є в базі.',
+          'Заповніть клієнта, пристрій і проблему.',
+          'Призначте інженера або залиште без нього, якщо це первинний прийом.',
+          'Натисніть "Зберегти замовлення".',
+        ],
+        actionLabel: 'Відкрити нове замовлення',
+        run: () => openManagerCreateMode(),
+      };
+    }
+
+    if (howWords.some((word) => normalizedManagerCommand.includes(word)) && (normalizedManagerCommand.includes('видат') || normalizedManagerCommand.includes('выдат'))) {
+      return {
+        title: 'AI-наставник: як видати замовлення',
+        summary: 'Видача відбувається тільки з картки замовлення після готовності та фінансової перевірки.',
+        steps: [
+          'Знайдіть замовлення через пошук або фільтр "Готово".',
+          'Відкрийте картку замовлення.',
+          'Перевірте статус, борг і акт.',
+          'Натисніть "Видати", якщо CRM не показує блокуючих причин.',
+        ],
+      };
+    }
+
+    if (howWords.some((word) => normalizedManagerCommand.includes(word)) && normalizedManagerCommand.includes('оплат')) {
+      return {
+        title: 'AI-наставник: як оформити оплату',
+        summary: 'Оплату краще проводити прямо з картки замовлення або швидкою кнопкою у списку.',
+        steps: [
+          'Знайдіть потрібне замовлення.',
+          'Натисніть "Оплата" або відкрийте картку.',
+          'Вкажіть суму та спосіб оплати.',
+          'Підтвердьте платіж і перевірте, чи борг закрився.',
+        ],
+      };
+    }
+
+    if (howWords.some((word) => normalizedManagerCommand.includes(word)) && clientWords.some((word) => normalizedManagerCommand.includes(word))) {
+      return {
+        title: 'AI-наставник: як знайти клієнта',
+        summary: 'Клієнта можна шукати прямо з головного рядка команди без переходу в окремий модуль.',
+        steps: [
+          'Введіть телефон, імʼя, компанію або частину номера.',
+          'Якщо CRM знайде клієнта, покаже збіг у результатах пошуку.',
+          'Для детальної картки натисніть "Відкрити клієнта".',
+        ],
+      };
+    }
+
+    if (managerSearchMatchedClient) {
+      return {
+        title: 'AI: знайдено клієнта',
+        summary: `Є збіг по клієнту ${managerSearchMatchedClient.name}. Можна одразу створити замовлення або відкрити картку.`,
+      };
+    }
+
+    return {
+      title: 'AI-помічник CRM',
+      summary: 'Спробуйте команду на кшталт: "відкрий заказ 1047", "покажи борги", "що готово до видачі", "як прийняти заказ".',
     };
+  })();
 
-    const handleManagerSearchSubmit = () => {
-      const needle = managerSearch.trim();
-      if (!needle) return;
-      const exact = findExactOrderMatch(managerSourceOrders, needle);
-      if (showManagerCreateForm && (exact || managerSearchMatchedClient)) {
-        return;
+  const handleManagerSearchSubmit = () => {
+    const needle = managerSearch.trim();
+    if (!needle) return;
+    if (managerAiResponse?.run) {
+      managerAiResponse.run();
+      return;
+    }
+    const exact = findExactOrderMatch(managerSourceOrders, needle);
+    if (showManagerCreateForm && (exact || managerSearchMatchedClient)) {
+      return;
       }
       if (exact) {
         openManagerOrderFromSearch(exact);
@@ -14740,10 +15478,11 @@ function OrdersPage(props: {
 
     return (
       <div className="page-grid manager-orders-page">
-        <section className="panel manager-orders-toolbar">
-          <div className="manager-orders-toolbar-search">
+        <PageTitle eyebrow="Головна" title="Головна сторінка" text="Пошук, дії по замовленнях і щоденна робоча стрічка менеджера в одному workspace." />
+        <section className="panel manager-orders-toolbar workspace-action-line">
+          <div className="manager-orders-toolbar-search workspace-action-main">
             {!showManagerCreateForm && (
-              <div className="manager-orders-search-input">
+              <div className="manager-orders-search-input workspace-action-search">
                 <input
                   type="text"
                   value={managerSearch}
@@ -14754,19 +15493,19 @@ function OrdersPage(props: {
                       handleManagerSearchSubmit();
                     }
                   }}
-                  placeholder="Пошук: номер / телефон / клієнт / пристрій"
+                  placeholder="Що потрібно зробити? Замовлення, клієнт, телефон, пристрій…"
                 />
                 <button type="button" className="manager-orders-search-button" onClick={handleManagerSearchSubmit} aria-label="Знайти замовлення">
                   🔍
                 </button>
               </div>
             )}
-            <button type="button" className="submit-button" onClick={openManagerCreateMode}>
+            <button type="button" className="submit-button workspace-primary-action" onClick={openManagerCreateMode}>
               ➕ Нове замовлення
             </button>
           </div>
           {!showManagerCreateForm && (
-            <div className="manager-orders-toolbar-filter">
+            <div className="manager-orders-toolbar-filter workspace-action-tools">
               <button type="button" className={managerFilter === 'all' ? 'primary' : ''} onClick={() => setManagerFilter('all')}>Усі</button>
               <button type="button" className={managerFilter === 'Прийнято' ? 'primary' : ''} onClick={() => setManagerFilter('Прийнято')}>Прийнято</button>
               <button type="button" className={managerFilter === 'В ремонті' ? 'primary' : ''} onClick={() => setManagerFilter('В ремонті')}>В ремонті</button>
@@ -14945,18 +15684,13 @@ function OrdersPage(props: {
         )}
 
         {!showManagerCreateForm && !hasManagerSearch && !hasActiveManagerFilter && (
-          <>
-            <section className="stats-grid manager-home-kpis">
-              <Metric icon={<ClipboardList />} label="Всього замовлень" value={String(managerBaseOrders.length)} hint="активний реєстр менеджера" />
-              <Metric icon={<History />} label="Прийнято" value={String(managerBaseOrders.filter((order) => simpleRepairStatus(order.status) === 'Прийнято').length)} hint="очікують наступного кроку" />
-              <Metric icon={<Wrench />} label="В ремонті" value={String(managerBaseOrders.filter((order) => simpleRepairStatus(order.status) === 'В ремонті').length)} hint="зараз у роботі" />
-              <Metric icon={<PackageCheck />} label="Готово до видачі" value={String(managerAlerts.readyWaiting)} hint="потрібна дія менеджера" />
-              <Metric icon={<Banknote />} label="Борг" value={String(managerAlerts.debt)} hint="замовлення з фінансовим ризиком" />
-            </section>
-            <section className="panel empty-state manager-home-hint">
-              Оберіть фільтр або скористайтесь пошуком
-            </section>
-          </>
+          <section className="stats-grid" aria-label="Статуси замовлень менеджера">
+            <Metric icon={<ClipboardList />} label="Замовлення" value={String(managerBaseOrders.length)} hint="усі активні замовлення" />
+            <Metric icon={<PackageCheck />} label="Прийнято" value={String(managerBaseOrders.filter((order) => simpleRepairStatus(order.status) === 'Прийнято').length)} hint="нові у роботі менеджера" />
+            <Metric icon={<Wrench />} label="В ремонті" value={String(managerBaseOrders.filter((order) => simpleRepairStatus(order.status) === 'В ремонті').length)} hint="зараз у цеху" />
+            <Metric icon={<CheckCircle2 />} label="Готово" value={String(managerAlerts.readyWaiting)} hint="готові до видачі" />
+            <Metric icon={<X />} label="Борг" value={String(managerAlerts.debt)} hint="замовлення з оплатою" />
+          </section>
         )}
 
         {showManagerCreateForm ? (
@@ -15017,21 +15751,21 @@ function OrdersPage(props: {
           </section>
         ) : (
         <>
-        {!hasManagerSearch && hasActiveManagerFilter && <div className="manager-orders-workspace">
+        {!hasManagerSearch && (hasActiveManagerFilter || (!showManagerCreateForm && !hasActiveManagerFilter)) && <div className="manager-orders-workspace">
           <section className="panel manager-orders-list manager-orders-list-full">
             <div className="panel-heading">
-              <h2>{props.allRoleOrders ? 'Мої замовлення' : 'Всі замовлення'}</h2>
-              <span>{managerVisibleOrders.length}</span>
+              <h2>{hasActiveManagerFilter ? (props.allRoleOrders ? 'Мої замовлення' : 'Всі замовлення') : 'Операційна стрічка'}</h2>
+              <span>{hasActiveManagerFilter ? managerVisibleOrders.length : managerOperationalOrders.length}</span>
             </div>
             <div className="manager-orders-list-body">
-              {managerVisibleOrders.map((order) => {
+              {(hasActiveManagerFilter ? managerVisibleOrders : managerOperationalOrders).map((order) => {
                 const debtSnapshot = orderDebtSnapshot(order);
                 const remainingForBadge = debtSnapshot.remainingDebt;
                 const profitSnapshot = orderActualProfit(order, props.users);
                 const strictStatusLabel = strictManagerWorkflowStatus(order);
                 const actionMeta = managerActionMeta(order);
-                const canQuickPay = remainingForBadge > 0 && order.status !== 'Видано';
                 const canQuickIssue = simpleRepairStatus(order.status) === 'Готово' && order.status !== 'Видано';
+                const currentStageLabel = statusDisplay(order.status);
                 return (
                   <button
                     type="button"
@@ -15039,22 +15773,33 @@ function OrdersPage(props: {
                     id={`manager-order-row-${order.id}`}
                     className={`manager-order-list-row manager-order-compact-row${managerActiveOrderId === order.id && isManagerOrderDetailOpen ? ' is-active' : ''}${order.status === 'Видано' ? ' is-issued' : ''}${actionMeta.signal === 'danger' ? ' is-problem' : actionMeta.signal === 'warning' ? ' is-warning' : actionMeta.signal === 'success' ? ' is-success' : ''}`}
                     onClick={() => openManagerOrderDetails(order.id)}
-                  >
+                    >
                     <span className="manager-order-primary">
                       <span className="manager-order-id-badge">{order.id}</span>
                       <span className="manager-order-device-icon" aria-hidden="true">{deviceIcon(order.device)}</span>
                       <span className="manager-order-primary-copy">
-                        <span className="manager-order-device-text">{order.device}</span>
                         <span className="manager-order-client-text">{order.client}</span>
+                        <span className="manager-order-device-text">{order.device}</span>
                       </span>
                     </span>
-                    <span className="manager-order-secondary">
+                    <span className="manager-order-center">
                       <span className="manager-order-cell manager-order-cell-status">
                         <span className={`manager-order-status-badge ${simpleRepairStatusClass(simpleRepairStatus(order.status))}`}>{strictStatusLabel}</span>
                       </span>
+                      <span className="manager-order-center-meta">
+                        <span><strong>Інженер:</strong> {order.engineer || 'Без інженера'}</span>
+                        <span><strong>Прийом:</strong> {order.intakeDate}</span>
+                        <span><strong>Етап:</strong> {currentStageLabel}</span>
+                      </span>
+                    </span>
+                    <span className="manager-order-finance">
                       <span className="manager-order-metric">
                         <span className="manager-order-metric-label">Сума</span>
                         <span className="manager-order-cell manager-order-cell-money">{money(debtSnapshot.total)}</span>
+                      </span>
+                      <span className="manager-order-metric">
+                        <span className="manager-order-metric-label">Оплата</span>
+                        <span className="manager-order-cell manager-order-cell-money">{money(profitSnapshot.totalPaid)}</span>
                       </span>
                       <span className="manager-order-metric">
                         <span className="manager-order-metric-label">Борг</span>
@@ -15062,50 +15807,47 @@ function OrdersPage(props: {
                       </span>
                       <span className="manager-order-metric manager-order-metric-profit" title={`Оплачено ${money(profitSnapshot.totalPaid)} - Запчастини ${money(profitSnapshot.partsCost)} - Інженер ${money(profitSnapshot.engineerSalary)} = Прибуток ${money(profitSnapshot.profit)}`}>
                         <span className="manager-order-metric-label">Прибуток</span>
-                        <span className="manager-order-profit-breakdown">
-                          <span className="manager-order-profit-line manager-order-profit-income">{money(profitSnapshot.totalPaid)} <small>оплата</small></span>
-                          <span className="manager-order-profit-line manager-order-profit-expense">- {money(profitSnapshot.partsCost)} <small>запчастини</small></span>
-                          <span className="manager-order-profit-line manager-order-profit-expense">- {money(profitSnapshot.engineerSalary)} <small>інженер</small></span>
-                          <span className={`manager-order-profit-badge ${profitSnapshot.profit > 0 ? 'is-positive' : profitSnapshot.profit < 0 ? 'is-negative' : 'is-neutral'}`}>= {money(profitSnapshot.profit)}</span>
-                        </span>
+                        <span className={`manager-order-profit-badge ${profitSnapshot.profit > 0 ? 'is-positive' : profitSnapshot.profit < 0 ? 'is-negative' : 'is-neutral'}`}>{money(profitSnapshot.profit)}</span>
                       </span>
-                      <span className="manager-order-metric manager-order-metric-date">
-                        <span className="manager-order-metric-label">Дата</span>
-                        <span className="manager-order-cell manager-order-cell-date">{order.intakeDate}</span>
-                      </span>
-                      {(canQuickPay || canQuickIssue) && (
-                        <span className="manager-order-inline-actions">
-                          {canQuickPay && (
-                            <button
-                              type="button"
-                              className="manager-order-inline-action manager-order-inline-action-payment"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                openManagerPaymentModal(order);
-                              }}
-                            >
-                              Оплата
-                            </button>
-                          )}
-                          {canQuickIssue && (
-                            <button
-                              type="button"
-                              className="manager-order-inline-action manager-order-inline-action-issue"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                openManagerIssueModal(order.id);
-                              }}
-                            >
-                              Видати
-                            </button>
-                          )}
-                        </span>
+                    </span>
+                    <span className="manager-order-actions">
+                      <button
+                        type="button"
+                        className="manager-order-inline-action manager-order-inline-action-open"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          openManagerOrderDetails(order.id);
+                        }}
+                      >
+                        Відкрити
+                      </button>
+                      <button
+                        type="button"
+                        className="manager-order-inline-action manager-order-inline-action-edit"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          openManagerOrderDetails(order.id);
+                        }}
+                      >
+                        Редагувати
+                      </button>
+                      {canQuickIssue && (
+                        <button
+                          type="button"
+                          className="manager-order-inline-action manager-order-inline-action-issue"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            openManagerIssueModal(order.id);
+                          }}
+                        >
+                          Видати
+                        </button>
                       )}
                     </span>
                   </button>
                 );
               })}
-              {managerVisibleOrders.length === 0 && <div className="empty-state">Немає замовлень</div>}
+              {(hasActiveManagerFilter ? managerVisibleOrders.length : managerOperationalOrders.length) === 0 && <div className="empty-state">Немає замовлень</div>}
             </div>
           </section>
         </div>}
@@ -17325,6 +18067,8 @@ function PartsPage({ products, requirements, receipts, movements, warehouses, or
   const [duplicatePayload, setDuplicatePayload] = useState<StockIntakeInput | null>(null);
   const [duplicateCandidates, setDuplicateCandidates] = useState<Product[]>([]);
   const importProductsInputRef = useRef<HTMLInputElement | null>(null);
+  const intakePanelRef = useRef<HTMLElement | null>(null);
+  const scannerPanelRef = useRef<HTMLElement | null>(null);
   const scannedProduct = findProductByLookup(products, stockScanCode.trim());
   const sortedProducts = [...products].sort((a, b) => {
     const availableDelta = available(a) - available(b);
@@ -17404,6 +18148,9 @@ function PartsPage({ products, requirements, receipts, movements, warehouses, or
     };
   }).filter((row) => row.totalQty > 0 || row.reservedQty > 0 || row.moveCount > 0);
   const mostLoadedWarehouse = [...warehouseAnalytics].sort((a, b) => b.totalQty - a.totalQty)[0];
+  const selectedProduct = filteredProducts.find((product) => product.id === expandedProductId)
+    ?? products.find((product) => product.id === expandedProductId)
+    ?? null;
 
   function getStockTone(product: Product) {
     const free = available(product);
@@ -17524,8 +18271,41 @@ function PartsPage({ products, requirements, receipts, movements, warehouses, or
   return (
     <div className="page-grid">
       <PageTitle eyebrow="Склад" title="Прихід, залишки і рух товару" text="Склад живе подіями: товар прийшов, зарезервувався, поїхав у ремонт або списався. Ручного редагування залишків немає." />
+      <section className="panel manager-orders-toolbar workspace-action-line">
+        <div className="manager-orders-toolbar-search workspace-action-main">
+          <div className="manager-orders-search-input workspace-action-search">
+            <input
+              value={stockSearch}
+              onChange={(event) => setStockSearch(event.target.value)}
+              placeholder="Пошук: запчастина / артикул / barcode / постачальник / місце"
+            />
+            <button type="button" className="manager-orders-search-button" aria-label="Пошук по складу">
+              🔍
+            </button>
+          </div>
+          {canReceiveStock && (
+            <button
+              type="button"
+              className="submit-button workspace-primary-action"
+              onClick={() => intakePanelRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' })}
+            >
+              + Прийняти товар
+            </button>
+          )}
+        </div>
+        <div className="manager-orders-toolbar-filter workspace-action-tools">
+          <button type="button" onClick={() => scannerPanelRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' })}>Сканер</button>
+          <button type="button" onClick={() => importProductsInputRef.current?.click()}>Імпорт</button>
+        </div>
+      </section>
+      <section className="stats-grid">
+        <Metric icon={<Archive />} label="У резерві" value={`${products.reduce((sum, product) => sum + product.reserved, 0)} шт.`} hint="ще не списано фізично" />
+        <Metric icon={<PackageCheck />} label="Дефіцитні позиції" value={`${reserveAnalyticsRows.filter((row) => row.availableQty <= 0).length}`} hint="товари без доступного залишку" />
+        <Metric icon={<Clock3 />} label="Середній вік резерву" value={`${averageReserveAge} дн.`} hint="час до списання або зняття" />
+        <Metric icon={<TrendingUp />} label="Найзавантаженіший склад" value={mostLoadedWarehouse?.warehouse.name ?? '—'} hint={mostLoadedWarehouse ? `${mostLoadedWarehouse.totalQty} шт.` : 'немає руху'} />
+      </section>
       {canReceiveStock && (
-      <section className="panel">
+      <section className="panel" ref={intakePanelRef}>
         <div className="panel-heading"><h2>Прийняти товар</h2><span>швидкий прихід без окремої таблиці</span></div>
         <input ref={importProductsInputRef} type="file" accept=".xlsx,.csv" onChange={handleProductsFileChange} className="backup-hidden-input" />
         <div className="quick-actions warehouse-intake-actions">
@@ -17628,7 +18408,7 @@ function PartsPage({ products, requirements, receipts, movements, warehouses, or
         )}
       </section>
       )}
-      <section className="panel">
+      <section className="panel" ref={scannerPanelRef}>
         <div className="panel-heading"><h2>Сканер штрих-коду</h2><span>barcode / артикул</span></div>
         <label>
           Скануйте товар
@@ -17652,12 +18432,6 @@ function PartsPage({ products, requirements, receipts, movements, warehouses, or
       </section>
       <section className="panel">
         <div className="panel-heading"><h2>Залишки на складі</h2><span>{filteredProducts.length} із {products.length}</span></div>
-        <section className="stats-grid">
-          <Metric icon={<Archive />} label="У резерві" value={`${products.reduce((sum, product) => sum + product.reserved, 0)} шт.`} hint="ще не списано фізично" />
-          <Metric icon={<PackageCheck />} label="Дефіцитні позиції" value={`${reserveAnalyticsRows.filter((row) => row.availableQty <= 0).length}`} hint="товари без доступного залишку" />
-          <Metric icon={<Clock3 />} label="Середній вік резерву" value={`${averageReserveAge} дн.`} hint="час до списання або зняття" />
-          <Metric icon={<TrendingUp />} label="Найзавантаженіший склад" value={mostLoadedWarehouse?.warehouse.name ?? '—'} hint={mostLoadedWarehouse ? `${mostLoadedWarehouse.totalQty} шт.` : 'немає руху'} />
-        </section>
         {warehouseAnalytics.length > 0 && (
           <div className="table stock-detail-table" style={{ marginBottom: '16px' }}>
             <div className="table-row table-head">
@@ -17680,13 +18454,6 @@ function PartsPage({ products, requirements, receipts, movements, warehouses, or
             ))}
           </div>
         )}
-        <div className="stock-table-search">
-          <input
-            value={stockSearch}
-            onChange={(event) => setStockSearch(event.target.value)}
-            placeholder="Пошук: SKU / назва / штрих-код"
-          />
-        </div>
         <div className="table stock-table stock-table-products">
           <div className="table-row table-head">
             <span>SKU</span>
@@ -17698,218 +18465,245 @@ function PartsPage({ products, requirements, receipts, movements, warehouses, or
           </div>
           {filteredProducts.map((product) => {
             const tone = getStockTone(product);
-            const isExpanded = expandedProductId === product.id;
-            const productReceipts = receipts.filter((receipt) => receipt.productId === product.id).slice(0, 5);
-            const productMovements = movements.filter((movement) => movement.productId === product.id).slice(0, 8);
-            const reserveRows = productReservationRows.get(product.id) ?? [];
-            const warehouseRows = Array.from(product.batches.reduce((map, batch) => {
-              const warehouseId = batch.warehouseId ?? DEFAULT_WAREHOUSE_ID;
-              const key = `${warehouseId}|${batchLocationLabel(batch)}`;
-              const current = map.get(key) ?? { warehouseId, location: batchLocationLabel(batch), total: 0, available: 0 };
-              current.total += batch.qtyTotal;
-              current.available += batch.qtyAvailable;
-              map.set(key, current);
-              return map;
-            }, new Map<string, { warehouseId: string; location: string; total: number; available: number }>()))
-              .map(([, value]) => value)
-              .sort((a, b) => a.warehouseId.localeCompare(b.warehouseId) || a.location.localeCompare(b.location, 'uk'));
             return (
-              <React.Fragment key={product.id}>
-                <button
-                  type="button"
-                  className={`table-row stock-product-row stock-product-row-${tone.tone}${isExpanded ? ' is-open' : ''}`}
-                  onClick={() => setExpandedProductId((current) => current === product.id ? '' : product.id)}
-                >
-                  <span>{product.sku}</span>
-                  <span>{product.name}</span>
-                  <span>{product.stock} / резерв {product.reserved} / доступно {available(product)} {product.unit}</span>
-                  <span>{product.min}</span>
-                  <span>{product.storageLocation || '—'}</span>
-                  <span className={tone.tone === 'danger' ? 'tag tag-red' : tone.tone === 'warning' ? 'tag tag-yellow' : 'tag'}>{tone.label}</span>
-                </button>
-                {isExpanded && (
-                  <div className="stock-product-detail">
-                    <div className="stock-product-detail-block">
-                      <strong>{product.name}</strong>
-                      <div className="stock-product-inline-meta">
-                        <span>SKU {product.sku}</span>
-                        <span>{product.brand || '—'} {product.model || ''}</span>
-                        <span>Штрих-коди: {productBarcodeList(product).join(', ') || '—'}</span>
-                        <span>Всього: {product.stock} {product.unit}</span>
-                        <span>У резерві: {product.reserved} {product.unit}</span>
-                        <span>Доступно: {available(product)} {product.unit}</span>
-                      </div>
-                    </div>
-                    <div className="stock-product-detail-grid">
-                      <div className="stock-product-detail-block">
-                        <strong>Склади та ячейки</strong>
-                        <div className="table stock-detail-table">
-                          <div className="table-row table-head">
-                            <span>Склад</span>
-                            <span>Ячейка</span>
-                            <span>Фізично</span>
-                            <span>Доступно</span>
-                          </div>
-                          {warehouseRows.length > 0 ? warehouseRows.map((row) => (
-                            <div key={`${row.warehouseId}-${row.location}`} className="table-row">
-                              <span>{warehouseNameById(warehouses, row.warehouseId)}</span>
-                              <span>{row.location}</span>
-                              <span>{row.total}</span>
-                              <span>{row.available}</span>
-                            </div>
-                          )) : <div className="empty-state">Локації ще не визначені.</div>}
-                        </div>
-                      </div>
-                      <div className="stock-product-detail-block">
-                        <strong>Резерви по замовленнях</strong>
-                        <div className="table stock-detail-table">
-                          <div className="table-row table-head">
-                            <span>Замовлення</span>
-                            <span>Кількість</span>
-                            <span>Статус</span>
-                            <span>Хто зарезервував</span>
-                            <span>Дата</span>
-                          </div>
-                          {reserveRows.length > 0 ? reserveRows.map((row) => (
-                            <div key={row.key} className="table-row">
-                              <span>{row.reference}</span>
-                              <span>{row.qty}</span>
-                              <span>{row.status}</span>
-                              <span>{row.actor || '—'}</span>
-                              <span>{row.date || '—'}</span>
-                            </div>
-                          )) : <div className="empty-state">Активних резервів немає.</div>}
-                        </div>
-                      </div>
-                      <div className="stock-product-detail-block">
-                        <strong>Партії FIFO</strong>
-                        <div className="table stock-detail-table">
-                          <div className="table-row table-head">
-                            <span>Склад</span>
-                            <span>Дата</span>
-                            <span>Постачальник</span>
-                            <span>Залишок</span>
-                            <span>Закупка</span>
-                            <span>Продаж</span>
-                            <span>Комірка</span>
-                            <span>Документ</span>
-                            <span>Партія</span>
-                          </div>
-                          {product.batches.length > 0 ? product.batches.map((batch) => (
-                            <div key={batch.id} className="table-row">
-                              <span>{warehouseNameById(warehouses, batch.warehouseId ?? DEFAULT_WAREHOUSE_ID)}</span>
-                              <span>{batch.purchaseDate}</span>
-                              <span>{batch.supplier || batch.source || '—'}</span>
-                              <span>{batch.qtyAvailable}/{batch.qtyTotal}</span>
-                              <span>{showCost ? money(batch.purchasePrice) : 'Приховано'}</span>
-                              <span>{money(batch.salePrice ?? product.price ?? 0)}</span>
-                              <span>{batchLocationLabel(batch)}</span>
-                              <span>{batch.documentNo || '—'}</span>
-                              <span>{batch.id}</span>
-                            </div>
-                          )) : <div className="empty-state">Партій немає.</div>}
-                        </div>
-                      </div>
-                      <div className="stock-product-detail-block">
-                        <strong>Закупки</strong>
-                        <div className="table stock-detail-table">
-                          <div className="table-row table-head">
-                            <span>Дата</span>
-                            <span>Кількість</span>
-                            <span>Ціна</span>
-                            <span>Постачальник</span>
-                          </div>
-                          {productReceipts.length > 0 ? productReceipts.map((receipt) => (
-                            <div key={receipt.id} className="table-row">
-                              <span>{receipt.date}</span>
-                              <span>{receipt.qty}</span>
-                              <span>{showCost ? money(receipt.price) : 'Приховано'}</span>
-                              <span>{receipt.supplier || '—'}</span>
-                            </div>
-                          )) : <div className="empty-state">Закупок ще немає.</div>}
-                        </div>
-                      </div>
-                    </div>
-                    <div className="stock-product-detail-block">
-                      <strong>Рух товару</strong>
-                      <div className="table stock-detail-table movement-table">
-                        <div className="table-row table-head">
-                          <span>Дата</span>
-                          <span>Тип</span>
-                          <span>Звідки</span>
-                          <span>Куди</span>
-                          <span>Кількість</span>
-                          <span>Партія</span>
-                          <span>Підстава</span>
-                          <span>Коментар</span>
-                        </div>
-                        {productMovements.length > 0 ? productMovements.map((movement) => (
-                          <div key={movement.id} className="table-row">
-                            <span>{movement.date}</span>
-                            <span>{movement.type}</span>
-                            <span>{movement.fromWarehouseId ? `${warehouseNameById(warehouses, movement.fromWarehouseId)} / ${movement.fromLocation || '—'}` : '—'}</span>
-                            <span>{movement.toWarehouseId ? `${warehouseNameById(warehouses, movement.toWarehouseId)} / ${movement.toLocation || '—'}` : '—'}</span>
-                            <span>{movement.qty}</span>
-                            <span>{movement.batchRefs || '—'}</span>
-                            <span>{movement.basis || movement.orderId || movement.purchaseId || '—'}</span>
-                            <span>{movement.comment}</span>
-                          </div>
-                        )) : <div className="empty-state">Руху ще немає.</div>}
-                      </div>
-                    </div>
-                    {canDo('stock.transfer') && (
-                      <div className="stock-product-detail-block">
-                        <strong>Перемістити між складами / ячейками</strong>
-                        <div className="table">
-                          <label>
-                            Партія
-                            <select value={transferBatchId} onChange={(event) => setTransferBatchId(event.target.value)}>
-                              <option value="">Оберіть партію</option>
-                              {product.batches.filter((batch) => batch.qtyAvailable > 0).map((batch) => (
-                                <option key={batch.id} value={batch.id}>
-                                  {warehouseNameById(warehouses, batch.warehouseId ?? DEFAULT_WAREHOUSE_ID)} · {batchLocationLabel(batch)} · {batch.qtyAvailable} шт.
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                          <label>
-                            Кількість
-                            <input type="number" min={1} value={transferQty} onChange={(event) => setTransferQty(event.target.value)} />
-                          </label>
-                          <label>
-                            Куди
-                            <select value={transferWarehouseId} onChange={(event) => setTransferWarehouseId(event.target.value)}>
-                              {warehouses.filter((warehouse) => warehouse.isActive).map((warehouse) => (
-                                <option key={warehouse.id} value={warehouse.id}>{warehouse.name}</option>
-                              ))}
-                            </select>
-                          </label>
-                          <label>
-                            Ячейка / полка
-                            <input value={transferLocation} placeholder="A-3-2 або Секція B / полка 6" onChange={(event) => setTransferLocation(event.target.value)} />
-                          </label>
-                          <label>
-                            Причина
-                            <input value={transferReason} placeholder="Внутрішнє переміщення / видача інженеру / брак" onChange={(event) => setTransferReason(event.target.value)} />
-                          </label>
-                        </div>
-                        <div className="action-row">
-                          <button type="button" onClick={() => submitTransfer(product)} disabled={!transferBatchId}>Перемістити</button>
-                        </div>
-                      </div>
-                    )}
-                    {canReceiveStock && (
-                      <div className="action-row">
-                        <button type="button" onClick={() => { setIntakeMode('existing'); setIntakeProductId(product.id); setIntakePrice(String(product.cost || '')); setIntakeBarcode(''); window.scrollTo({ top: 0, behavior: 'smooth' }); }}>Додати прихід</button>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </React.Fragment>
+              <button
+                key={product.id}
+                type="button"
+                className={`table-row stock-product-row stock-product-row-${tone.tone}${selectedProduct?.id === product.id ? ' is-open' : ''}`}
+                onClick={() => setExpandedProductId(product.id)}
+              >
+                <span>{product.sku}</span>
+                <span>{product.name}</span>
+                <span>{product.stock} / резерв {product.reserved} / доступно {available(product)} {product.unit}</span>
+                <span>{product.min}</span>
+                <span>{product.storageLocation || '—'}</span>
+                <span className={tone.tone === 'danger' ? 'tag tag-red' : tone.tone === 'warning' ? 'tag tag-yellow' : 'tag'}>{tone.label}</span>
+              </button>
             );
           })}
         </div>
       </section>
+      {selectedProduct && (() => {
+        const product = selectedProduct;
+        const productReceipts = receipts.filter((receipt) => receipt.productId === product.id).slice(0, 5);
+        const productMovements = movements.filter((movement) => movement.productId === product.id).slice(0, 8);
+        const reserveRows = productReservationRows.get(product.id) ?? [];
+        const warehouseRows = Array.from(product.batches.reduce((map, batch) => {
+          const warehouseId = batch.warehouseId ?? DEFAULT_WAREHOUSE_ID;
+          const key = `${warehouseId}|${batchLocationLabel(batch)}`;
+          const current = map.get(key) ?? { warehouseId, location: batchLocationLabel(batch), total: 0, available: 0 };
+          current.total += batch.qtyTotal;
+          current.available += batch.qtyAvailable;
+          map.set(key, current);
+          return map;
+        }, new Map<string, { warehouseId: string; location: string; total: number; available: number }>()))
+          .map(([, value]) => value)
+          .sort((a, b) => a.warehouseId.localeCompare(b.warehouseId) || a.location.localeCompare(b.location, 'uk'));
+        return (
+          <div className="manager-order-modal-backdrop" onClick={() => setExpandedProductId('')}>
+            <section className="panel manager-order-focus manager-order-modal stock-focus-modal" onClick={(event) => event.stopPropagation()}>
+              <div className="manager-order-card-header">
+                <div className="manager-order-card-title">
+                  <div className="panel-heading">
+                    <h2>{product.name}</h2>
+                    <span>{product.sku}</span>
+                  </div>
+                  <div className="manager-order-inline-actions">
+                    {canReceiveStock && (
+                      <button
+                        type="button"
+                        className="submit-button"
+                        onClick={() => {
+                          setExpandedProductId('');
+                          setIntakeMode('existing');
+                          setIntakeProductId(product.id);
+                          setIntakePrice(String(product.cost || ''));
+                          setIntakeBarcode('');
+                          intakePanelRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+                        }}
+                      >
+                        Додати прихід
+                      </button>
+                    )}
+                    <button type="button" onClick={() => setExpandedProductId('')}>Закрити</button>
+                  </div>
+                </div>
+              </div>
+              <div className="stock-product-detail stock-product-detail-modal">
+                <div className="stock-product-detail-block">
+                  <strong>{product.name}</strong>
+                  <div className="stock-product-inline-meta">
+                    <span>SKU {product.sku}</span>
+                    <span>{product.brand || '—'} {product.model || ''}</span>
+                    <span>Штрих-коди: {productBarcodeList(product).join(', ') || '—'}</span>
+                    <span>Всього: {product.stock} {product.unit}</span>
+                    <span>У резерві: {product.reserved} {product.unit}</span>
+                    <span>Доступно: {available(product)} {product.unit}</span>
+                  </div>
+                </div>
+                <div className="stock-product-detail-grid">
+                  <div className="stock-product-detail-block">
+                    <strong>Склади та ячейки</strong>
+                    <div className="table stock-detail-table">
+                      <div className="table-row table-head">
+                        <span>Склад</span>
+                        <span>Ячейка</span>
+                        <span>Фізично</span>
+                        <span>Доступно</span>
+                      </div>
+                      {warehouseRows.length > 0 ? warehouseRows.map((row) => (
+                        <div key={`${row.warehouseId}-${row.location}`} className="table-row">
+                          <span>{warehouseNameById(warehouses, row.warehouseId)}</span>
+                          <span>{row.location}</span>
+                          <span>{row.total}</span>
+                          <span>{row.available}</span>
+                        </div>
+                      )) : <div className="empty-state">Локації ще не визначені.</div>}
+                    </div>
+                  </div>
+                  <div className="stock-product-detail-block">
+                    <strong>Резерви по замовленнях</strong>
+                    <div className="table stock-detail-table">
+                      <div className="table-row table-head">
+                        <span>Замовлення</span>
+                        <span>Кількість</span>
+                        <span>Статус</span>
+                        <span>Хто зарезервував</span>
+                        <span>Дата</span>
+                      </div>
+                      {reserveRows.length > 0 ? reserveRows.map((row) => (
+                        <div key={row.key} className="table-row">
+                          <span>{row.reference}</span>
+                          <span>{row.qty}</span>
+                          <span>{row.status}</span>
+                          <span>{row.actor || '—'}</span>
+                          <span>{row.date || '—'}</span>
+                        </div>
+                      )) : <div className="empty-state">Активних резервів немає.</div>}
+                    </div>
+                  </div>
+                  <div className="stock-product-detail-block">
+                    <strong>Партії FIFO</strong>
+                    <div className="table stock-detail-table">
+                      <div className="table-row table-head">
+                        <span>Склад</span>
+                        <span>Дата</span>
+                        <span>Постачальник</span>
+                        <span>Залишок</span>
+                        <span>Закупка</span>
+                        <span>Продаж</span>
+                        <span>Комірка</span>
+                        <span>Документ</span>
+                        <span>Партія</span>
+                      </div>
+                      {product.batches.length > 0 ? product.batches.map((batch) => (
+                        <div key={batch.id} className="table-row">
+                          <span>{warehouseNameById(warehouses, batch.warehouseId ?? DEFAULT_WAREHOUSE_ID)}</span>
+                          <span>{batch.purchaseDate}</span>
+                          <span>{batch.supplier || batch.source || '—'}</span>
+                          <span>{batch.qtyAvailable}/{batch.qtyTotal}</span>
+                          <span>{showCost ? money(batch.purchasePrice) : 'Приховано'}</span>
+                          <span>{money(batch.salePrice ?? product.price ?? 0)}</span>
+                          <span>{batchLocationLabel(batch)}</span>
+                          <span>{batch.documentNo || '—'}</span>
+                          <span>{batch.id}</span>
+                        </div>
+                      )) : <div className="empty-state">Партій немає.</div>}
+                    </div>
+                  </div>
+                  <div className="stock-product-detail-block">
+                    <strong>Закупки</strong>
+                    <div className="table stock-detail-table">
+                      <div className="table-row table-head">
+                        <span>Дата</span>
+                        <span>Кількість</span>
+                        <span>Ціна</span>
+                        <span>Постачальник</span>
+                      </div>
+                      {productReceipts.length > 0 ? productReceipts.map((receipt) => (
+                        <div key={receipt.id} className="table-row">
+                          <span>{receipt.date}</span>
+                          <span>{receipt.qty}</span>
+                          <span>{showCost ? money(receipt.price) : 'Приховано'}</span>
+                          <span>{receipt.supplier || '—'}</span>
+                        </div>
+                      )) : <div className="empty-state">Закупок ще немає.</div>}
+                    </div>
+                  </div>
+                </div>
+                <div className="stock-product-detail-block">
+                  <strong>Рух товару</strong>
+                  <div className="table stock-detail-table movement-table">
+                    <div className="table-row table-head">
+                      <span>Дата</span>
+                      <span>Тип</span>
+                      <span>Звідки</span>
+                      <span>Куди</span>
+                      <span>Кількість</span>
+                      <span>Партія</span>
+                      <span>Підстава</span>
+                      <span>Коментар</span>
+                    </div>
+                    {productMovements.length > 0 ? productMovements.map((movement) => (
+                      <div key={movement.id} className="table-row">
+                        <span>{movement.date}</span>
+                        <span>{movement.type}</span>
+                        <span>{movement.fromWarehouseId ? `${warehouseNameById(warehouses, movement.fromWarehouseId)} / ${movement.fromLocation || '—'}` : '—'}</span>
+                        <span>{movement.toWarehouseId ? `${warehouseNameById(warehouses, movement.toWarehouseId)} / ${movement.toLocation || '—'}` : '—'}</span>
+                        <span>{movement.qty}</span>
+                        <span>{movement.batchRefs || '—'}</span>
+                        <span>{movement.basis || movement.orderId || movement.purchaseId || '—'}</span>
+                        <span>{movement.comment}</span>
+                      </div>
+                    )) : <div className="empty-state">Руху ще немає.</div>}
+                  </div>
+                </div>
+                {canDo('stock.transfer') && (
+                  <div className="stock-product-detail-block">
+                    <strong>Перемістити між складами / ячейками</strong>
+                    <div className="table">
+                      <label>
+                        Партія
+                        <select value={transferBatchId} onChange={(event) => setTransferBatchId(event.target.value)}>
+                          <option value="">Оберіть партію</option>
+                          {product.batches.filter((batch) => batch.qtyAvailable > 0).map((batch) => (
+                            <option key={batch.id} value={batch.id}>
+                              {warehouseNameById(warehouses, batch.warehouseId ?? DEFAULT_WAREHOUSE_ID)} · {batchLocationLabel(batch)} · {batch.qtyAvailable} шт.
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        Кількість
+                        <input type="number" min={1} value={transferQty} onChange={(event) => setTransferQty(event.target.value)} />
+                      </label>
+                      <label>
+                        Куди
+                        <select value={transferWarehouseId} onChange={(event) => setTransferWarehouseId(event.target.value)}>
+                          {warehouses.filter((warehouse) => warehouse.isActive).map((warehouse) => (
+                            <option key={warehouse.id} value={warehouse.id}>{warehouse.name}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        Ячейка / полка
+                        <input value={transferLocation} placeholder="A-3-2 або Секція B / полка 6" onChange={(event) => setTransferLocation(event.target.value)} />
+                      </label>
+                      <label>
+                        Причина
+                        <input value={transferReason} placeholder="Внутрішнє переміщення / видача інженеру / брак" onChange={(event) => setTransferReason(event.target.value)} />
+                      </label>
+                    </div>
+                    <div className="action-row">
+                      <button type="button" onClick={() => submitTransfer(product)} disabled={!transferBatchId}>Перемістити</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </section>
+          </div>
+        );
+      })()}
       <section className="panel">
         <div className="panel-heading"><h2>Потреби із ремонтів</h2><span>{requirements.length} позицій</span></div>
         <div className="task-list">
@@ -17955,9 +18749,12 @@ function PurchasesPage({
   const canReceiveStock = canDo('stock.receive');
   const [expandedProductId, setExpandedProductId] = useState('');
   const [expandedPurchaseId, setExpandedPurchaseId] = useState('');
+  const [purchaseSearch, setPurchaseSearch] = useState('');
+  const [purchaseFilter, setPurchaseFilter] = useState<'all' | 'debt' | 'paid'>('all');
   const [selectedSupplierId, setSelectedSupplierId] = useState('');
   const [isCreatePurchaseOpen, setIsCreatePurchaseOpen] = useState(false);
   const [isCreateSupplierOpen, setIsCreateSupplierOpen] = useState(false);
+  const supplierSectionRef = useRef<HTMLElement | null>(null);
   const [purchaseSupplier, setPurchaseSupplier] = useState('');
   const [purchaseDocumentNumber, setPurchaseDocumentNumber] = useState('');
   const [purchaseDate, setPurchaseDate] = useState(today);
@@ -18070,6 +18867,27 @@ function PurchasesPage({
     .sort((a, b) => b.overdueDays - a.overdueDays || b.debt - a.debt);
   const topSuppliersByTotal = supplierAnalytics.slice(0, 5);
   const overdueSuppliers = supplierDebtRows.filter((row) => row.overdueDays > 0);
+  const visiblePurchases = sortedPurchases.filter((purchase) => {
+    const total = purchase.items.reduce((sum, item) => sum + item.qty * item.price, 0);
+    const needle = purchaseSearch.trim().toLowerCase();
+    const matchesSearch = !needle || [
+      purchase.supplier,
+      purchase.documentNumber,
+      purchase.purchaseDate,
+      purchase.orderedAt,
+      purchase.status,
+      purchase.paymentStatus,
+      String(total),
+      ...purchase.items.map((item) => `${item.productName || productName(item.productId)} ${item.comment || ''}`),
+    ].join(' ').toLowerCase().includes(needle);
+    if (!matchesSearch) return false;
+    if (purchaseFilter === 'debt') return (purchase.supplierDebt ?? 0) > 0;
+    if (purchaseFilter === 'paid') return (purchase.supplierDebt ?? 0) <= 0;
+    return true;
+  });
+  const selectedPurchase = visiblePurchases.find((purchase) => purchase.id === expandedPurchaseId)
+    ?? sortedPurchases.find((purchase) => purchase.id === expandedPurchaseId)
+    ?? null;
   const shortageRows = products
     .filter((product) => available(product) < Math.max(product.min, 1))
     .map((product) => {
@@ -18144,20 +18962,33 @@ function PurchasesPage({
   return (
     <div className="page-grid">
       <PageTitle eyebrow="Закупівлі" title="Закупівлі / Прихід товару" text="Закупка, прихід партій, FIFO і аналітика по постачанню." />
+      <section className="panel manager-orders-toolbar workspace-action-line">
+        <div className="manager-orders-toolbar-search workspace-action-main">
+          <div className="manager-orders-search-input workspace-action-search">
+            <input
+              type="text"
+              value={purchaseSearch}
+              onChange={(event) => setPurchaseSearch(event.target.value)}
+              placeholder="Пошук: постачальник / документ / товар / сума"
+            />
+            <button type="button" className="manager-orders-search-button" aria-label="Пошук закупівлі">
+              🔍
+            </button>
+          </div>
+          {canCreatePurchase && <button type="button" className="submit-button workspace-primary-action" onClick={() => setIsCreatePurchaseOpen(true)}>+ Нова закупівля</button>}
+        </div>
+        <div className="manager-orders-toolbar-filter workspace-action-tools">
+          <button type="button" className={purchaseFilter === 'all' ? 'primary' : ''} onClick={() => setPurchaseFilter('all')}>Усі</button>
+          <button type="button" className={purchaseFilter === 'debt' ? 'primary' : ''} onClick={() => setPurchaseFilter('debt')}>Борг</button>
+          <button type="button" className={purchaseFilter === 'paid' ? 'primary' : ''} onClick={() => setPurchaseFilter('paid')}>Оплачено</button>
+          <button type="button" onClick={() => supplierSectionRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' })}>Постачальники</button>
+        </div>
+      </section>
       <section className="executive-kpis finance-center-kpis">
         <article className="executive-kpi-card"><span>Сума закупівель</span><strong>{money(purchaseTotals)}</strong></article>
         <article className="executive-kpi-card"><span>Оплачено постачальникам</span><strong>{money(paidToSuppliersTotal)}</strong></article>
         <article className="executive-kpi-card"><span>Борг постачальникам</span><strong>{money(supplierDebtTotal)}</strong></article>
         <article className="executive-kpi-card"><span>Кількість закупівель</span><strong>{String(sortedPurchases.length)}</strong></article>
-      </section>
-      <section className="panel manager-orders-toolbar">
-        <div className="panel-heading">
-          <h2>Закупівлі</h2>
-          <span>{sortedPurchases.length}</span>
-        </div>
-        <div className="manager-order-inline-actions">
-          {canCreatePurchase && <button type="button" className="submit-button" onClick={() => setIsCreatePurchaseOpen(true)}>+ Нова закупівля</button>}
-        </div>
       </section>
       <section className="panel">
         <div className="table stock-table purchase-table-products">
@@ -18171,73 +19002,85 @@ function PurchasesPage({
             <span>Позиції</span>
             <span>Хто оформив</span>
           </div>
-          {sortedPurchases.map((purchase) => {
+          {visiblePurchases.map((purchase) => {
             const total = purchase.items.reduce((sum, item) => sum + item.qty * item.price, 0);
-            const isExpanded = expandedPurchaseId === purchase.id;
             return (
-              <React.Fragment key={purchase.id}>
-                <button type="button" className="table-row stock-product-row stock-product-row-warning" onClick={() => setExpandedPurchaseId((current) => current === purchase.id ? '' : purchase.id)}>
-                  <span>{purchase.supplier}</span>
-                  <span>{purchase.purchaseDate ?? purchase.orderedAt}</span>
-                  <span>{purchase.documentNumber || purchase.id}</span>
-                  <span>{money(total)}</span>
-                  <span><span className={purchaseDebtTone(purchase)}>{purchaseStatusLabel(purchase.paymentStatus)} · {money(purchase.supplierDebt ?? 0)}</span></span>
-                  <span><span className={purchase.status === 'Отримано' ? 'tag tag-teal' : purchase.status === 'В дорозі' ? 'tag tag-blue' : 'tag tag-yellow'}>{purchase.status}</span></span>
-                  <span>{purchase.items.length}</span>
-                  <span>{purchase.requestedBy || '—'}</span>
-                </button>
-                {isExpanded && (
-                  <div className="stock-product-detail">
-                    <div className="table purchase-detail-form">
-                      <label>Постачальник<input value={purchase.supplier} onChange={(event) => updatePurchaseProcurementMeta(purchase.id, { supplier: event.target.value })} readOnly={!canEditPurchase} /></label>
-                      <label>Документ<input value={purchase.documentNumber ?? ''} onChange={(event) => updatePurchaseProcurementMeta(purchase.id, { documentNumber: event.target.value })} readOnly={!canEditPurchase} /></label>
-                      <label>Дата<input type="date" value={purchase.purchaseDate ?? ''} onChange={(event) => updatePurchaseProcurementMeta(purchase.id, { purchaseDate: event.target.value })} readOnly={!canEditPurchase} /></label>
-                      <label>Оплата<select value={purchase.paymentType ?? 'bank'} onChange={(event) => updatePurchaseProcurementMeta(purchase.id, { paymentType: event.target.value as 'bank' | 'cash' | 'card' | 'other' })} disabled={!canEditPurchase}><option value="bank">Безготівка</option><option value="cash">Готівка</option><option value="card">Картка</option><option value="other">Інше</option></select></label>
-                      <label>Статус оплати<select value={purchase.paymentStatus ?? 'debt'} onChange={(event) => updatePurchaseProcurementMeta(purchase.id, { paymentStatus: event.target.value as 'paid' | 'partial' | 'debt' })} disabled={!canEditPurchase}><option value="paid">Оплачено</option><option value="partial">Частково оплачено</option><option value="debt">В борг</option></select></label>
-                      <label>Оплачено постачальнику<input type="number" min={0} max={purchaseItemsTotal(purchase.items)} value={purchase.paidToSupplier ?? 0} onChange={(event) => updatePurchaseProcurementMeta(purchase.id, { paidToSupplier: Number(event.target.value) || 0 })} readOnly={!canEditPurchase} /></label>
-                      <label>Строк оплати<input type="date" value={purchase.dueDate ?? ''} onChange={(event) => updatePurchaseProcurementMeta(purchase.id, { dueDate: event.target.value })} readOnly={!canEditPurchase} /></label>
-                      <label>Коментар<input value={purchase.comment ?? ''} onChange={(event) => updatePurchaseProcurementMeta(purchase.id, { comment: event.target.value })} readOnly={!canEditPurchase} /></label>
-                    </div>
-                    <div className="table stock-detail-table">
-                      <div className="table-row table-head">
-                        <span>Товар</span>
-                        <span>Категорія</span>
-                        <span>К-сть</span>
-                        <span>Закупка</span>
-                        <span>Продаж</span>
-                        <span>Комірка</span>
-                        <span>Гарантія</span>
-                        <span>Коментар</span>
-                      </div>
-                      {purchase.items.map((item, index) => (
-                        <div className="table-row" key={`${purchase.id}-${item.productId}-${index}`}>
-                          <span>{item.productName || productName(item.productId)}</span>
-                          <span>{item.category || products.find((product) => product.id === item.productId)?.category || '—'}</span>
-                          <span>{item.qty}</span>
-                          <span>{money(item.price)}</span>
-                          <span>{money(item.salePrice ?? products.find((product) => product.id === item.productId)?.price ?? 0)}</span>
-                          <span>{item.shelfLocation || products.find((product) => product.id === item.productId)?.storageLocation || '—'}</span>
-                          <span>{item.warranty || '—'}</span>
-                          <span>{item.comment || '—'}</span>
-                        </div>
-                      ))}
-                    </div>
-                    <div className="action-row">
-                      {canChangePurchaseStatus && <button type="button" onClick={() => updatePurchaseProcurementMeta(purchase.id, { status: 'Нова' })}>Нова</button>}
-                      {canChangePurchaseStatus && <button type="button" onClick={() => updatePurchaseProcurementMeta(purchase.id, { status: 'Замовлено' })}>Замовлено</button>}
-                      {canChangePurchaseStatus && <button type="button" onClick={() => updatePurchaseProcurementMeta(purchase.id, { status: 'В дорозі' })}>В дорозі</button>}
-                      {canReceiveStock && <button type="button" className="submit-button" onClick={() => receivePurchase(purchase.id)} disabled={!purchase.items.every((item) => item.price > 0)}>Підтвердити прихід</button>}
-                      <button type="button" onClick={() => printDocument('Прихідна накладна', 'purchase_order', purchase.id, purchase.supplier || 'Постачальник')}>Прихідна</button>
-                    </div>
-                  </div>
-                )}
-              </React.Fragment>
+              <button type="button" key={purchase.id} className="table-row stock-product-row stock-product-row-warning" onClick={() => setExpandedPurchaseId(purchase.id)}>
+                <span>{purchase.supplier}</span>
+                <span>{purchase.purchaseDate ?? purchase.orderedAt}</span>
+                <span>{purchase.documentNumber || purchase.id}</span>
+                <span>{money(total)}</span>
+                <span><span className={purchaseDebtTone(purchase)}>{purchaseStatusLabel(purchase.paymentStatus)} · {money(purchase.supplierDebt ?? 0)}</span></span>
+                <span><span className={purchase.status === 'Отримано' ? 'tag tag-teal' : purchase.status === 'В дорозі' ? 'tag tag-blue' : 'tag tag-yellow'}>{purchase.status}</span></span>
+                <span>{purchase.items.length}</span>
+                <span>{purchase.requestedBy || '—'}</span>
+              </button>
             );
           })}
-          {sortedPurchases.length === 0 && <div className="empty-state">Закупівель ще немає.</div>}
+          {visiblePurchases.length === 0 && <div className="empty-state">Закупівель ще немає.</div>}
         </div>
       </section>
-      <section className="panel">
+      {selectedPurchase && (
+        <div className="manager-order-modal-backdrop" onClick={() => setExpandedPurchaseId('')}>
+          <section className="panel manager-order-focus manager-order-modal stock-focus-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="manager-order-card-header">
+              <div className="manager-order-card-title">
+                <div className="panel-heading">
+                  <h2>{selectedPurchase.supplier || 'Закупівля'}</h2>
+                  <span>{selectedPurchase.documentNumber || selectedPurchase.id}</span>
+                </div>
+                <div className="manager-order-inline-actions">
+                  <button type="button" onClick={() => setExpandedPurchaseId('')}>Закрити</button>
+                </div>
+              </div>
+            </div>
+            <div className="stock-product-detail stock-product-detail-modal">
+              <div className="table purchase-detail-form">
+                <label>Постачальник<input value={selectedPurchase.supplier} onChange={(event) => updatePurchaseProcurementMeta(selectedPurchase.id, { supplier: event.target.value })} readOnly={!canEditPurchase} /></label>
+                <label>Документ<input value={selectedPurchase.documentNumber ?? ''} onChange={(event) => updatePurchaseProcurementMeta(selectedPurchase.id, { documentNumber: event.target.value })} readOnly={!canEditPurchase} /></label>
+                <label>Дата<input type="date" value={selectedPurchase.purchaseDate ?? ''} onChange={(event) => updatePurchaseProcurementMeta(selectedPurchase.id, { purchaseDate: event.target.value })} readOnly={!canEditPurchase} /></label>
+                <label>Оплата<select value={selectedPurchase.paymentType ?? 'bank'} onChange={(event) => updatePurchaseProcurementMeta(selectedPurchase.id, { paymentType: event.target.value as 'bank' | 'cash' | 'card' | 'other' })} disabled={!canEditPurchase}><option value="bank">Безготівка</option><option value="cash">Готівка</option><option value="card">Картка</option><option value="other">Інше</option></select></label>
+                <label>Статус оплати<select value={selectedPurchase.paymentStatus ?? 'debt'} onChange={(event) => updatePurchaseProcurementMeta(selectedPurchase.id, { paymentStatus: event.target.value as 'paid' | 'partial' | 'debt' })} disabled={!canEditPurchase}><option value="paid">Оплачено</option><option value="partial">Частково оплачено</option><option value="debt">В борг</option></select></label>
+                <label>Оплачено постачальнику<input type="number" min={0} max={purchaseItemsTotal(selectedPurchase.items)} value={selectedPurchase.paidToSupplier ?? 0} onChange={(event) => updatePurchaseProcurementMeta(selectedPurchase.id, { paidToSupplier: Number(event.target.value) || 0 })} readOnly={!canEditPurchase} /></label>
+                <label>Строк оплати<input type="date" value={selectedPurchase.dueDate ?? ''} onChange={(event) => updatePurchaseProcurementMeta(selectedPurchase.id, { dueDate: event.target.value })} readOnly={!canEditPurchase} /></label>
+                <label>Коментар<input value={selectedPurchase.comment ?? ''} onChange={(event) => updatePurchaseProcurementMeta(selectedPurchase.id, { comment: event.target.value })} readOnly={!canEditPurchase} /></label>
+              </div>
+              <div className="table stock-detail-table">
+                <div className="table-row table-head">
+                  <span>Товар</span>
+                  <span>Категорія</span>
+                  <span>К-сть</span>
+                  <span>Закупка</span>
+                  <span>Продаж</span>
+                  <span>Комірка</span>
+                  <span>Гарантія</span>
+                  <span>Коментар</span>
+                </div>
+                {selectedPurchase.items.map((item, index) => (
+                  <div className="table-row" key={`${selectedPurchase.id}-${item.productId}-${index}`}>
+                    <span>{item.productName || productName(item.productId)}</span>
+                    <span>{item.category || products.find((product) => product.id === item.productId)?.category || '—'}</span>
+                    <span>{item.qty}</span>
+                    <span>{money(item.price)}</span>
+                    <span>{money(item.salePrice ?? products.find((product) => product.id === item.productId)?.price ?? 0)}</span>
+                    <span>{item.shelfLocation || products.find((product) => product.id === item.productId)?.storageLocation || '—'}</span>
+                    <span>{item.warranty || '—'}</span>
+                    <span>{item.comment || '—'}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="action-row">
+                {canChangePurchaseStatus && <button type="button" onClick={() => updatePurchaseProcurementMeta(selectedPurchase.id, { status: 'Нова' })}>Нова</button>}
+                {canChangePurchaseStatus && <button type="button" onClick={() => updatePurchaseProcurementMeta(selectedPurchase.id, { status: 'Замовлено' })}>Замовлено</button>}
+                {canChangePurchaseStatus && <button type="button" onClick={() => updatePurchaseProcurementMeta(selectedPurchase.id, { status: 'В дорозі' })}>В дорозі</button>}
+                {canReceiveStock && <button type="button" className="submit-button" onClick={() => receivePurchase(selectedPurchase.id)} disabled={!selectedPurchase.items.every((item) => item.price > 0)}>Підтвердити прихід</button>}
+                <button type="button" onClick={() => printDocument('Прихідна накладна', 'purchase_order', selectedPurchase.id, selectedPurchase.supplier || 'Постачальник')}>Прихідна</button>
+              </div>
+            </div>
+          </section>
+        </div>
+      )}
+      <section className="panel" ref={supplierSectionRef}>
         <div className="panel-heading"><h2>Борги постачальникам</h2><span>{supplierDebtRows.length}</span></div>
         <div className="table stock-table purchase-table-products">
           <div className="table-row table-head">
@@ -19690,29 +20533,33 @@ function StoragePage({ orders, locations, movementLogs }: { orders: ServiceOrder
   const [zoneFilter, setZoneFilter] = useState<'ALL' | WarehouseZone>('ALL');
   const [rackFilter, setRackFilter] = useState('ALL');
   const [shelfFilter, setShelfFilter] = useState('ALL');
+  const [occupancyFilter, setOccupancyFilter] = useState<'all' | 'free' | 'occupied'>('all');
   const occupiedLocations = new Map(orders.filter((order) => order.locationCode).map((order) => [order.locationCode as string, order]));
   const filteredLocations = locations.filter((location) => {
     const matchesSearch = !search.trim() || [location.code, location.zone, location.rack, location.shelf].join(' ').toLowerCase().includes(search.trim().toLowerCase());
     const matchesZone = zoneFilter === 'ALL' || location.zone === zoneFilter;
     const matchesRack = rackFilter === 'ALL' || location.rack === rackFilter;
     const matchesShelf = shelfFilter === 'ALL' || location.shelf === shelfFilter;
-    return matchesSearch && matchesZone && matchesRack && matchesShelf;
+    const isOccupied = occupiedLocations.has(location.code);
+    const matchesOccupancy = occupancyFilter === 'all' || (occupancyFilter === 'free' ? !isOccupied : isOccupied);
+    return matchesSearch && matchesZone && matchesRack && matchesShelf && matchesOccupancy;
   });
   const free = filteredLocations.filter((location) => !occupiedLocations.has(location.code));
   const occupied = filteredLocations.filter((location) => occupiedLocations.has(location.code));
   return (
     <div className="page-grid">
       <PageTitle eyebrow="Полки / комірки" title="Координатне зберігання замовлень" text="Кожне замовлення має фізичне місце. Пошук працює по коду локації, зоні, стелажу і полиці." />
-      <section className="stats-grid">
-        <Metric icon={<Archive />} label="Комірок" value={String(locations.length)} hint="підписані фізично" />
-        <Metric icon={<CheckCircle2 />} label="Вільно" value={String(free.length)} hint="система може запропонувати" />
-        <Metric icon={<PackageCheck />} label="Зайнято" value={String(occupied.length)} hint="не можна покласти вдруге" />
-        <Metric icon={<Search />} label="Пошук" value="Код / зона / полиця" hint="REPAIR-A-01 або READY" />
-      </section>
-      <section className="panel">
-        <div className="panel-heading"><h2>Пошук і фільтри</h2><span>{filteredLocations.length} локацій</span></div>
-        <div className="action-row">
-          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Пошук по locationCode" />
+      <section className="panel manager-orders-toolbar workspace-action-line">
+        <div className="manager-orders-toolbar-search workspace-action-main">
+          <div className="manager-orders-search-input workspace-action-search">
+            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Пошук: код / зона / полиця / замовлення" />
+            <button type="button" className="manager-orders-search-button" aria-label="Пошук по комірках">🔍</button>
+          </div>
+        </div>
+        <div className="manager-orders-toolbar-filter workspace-action-tools">
+          <button type="button" className={occupancyFilter === 'all' ? 'primary' : ''} onClick={() => setOccupancyFilter('all')}>Усі</button>
+          <button type="button" className={occupancyFilter === 'free' ? 'primary' : ''} onClick={() => setOccupancyFilter('free')}>Вільні</button>
+          <button type="button" className={occupancyFilter === 'occupied' ? 'primary' : ''} onClick={() => setOccupancyFilter('occupied')}>Зайняті</button>
           <select value={zoneFilter} onChange={(event) => setZoneFilter(event.target.value as 'ALL' | WarehouseZone)}>
             <option value="ALL">Усі зони</option>
             <option value="REPAIR">REPAIR</option>
@@ -19728,6 +20575,12 @@ function StoragePage({ orders, locations, movementLogs }: { orders: ServiceOrder
             {[...new Set(locations.map((location) => location.shelf))].map((shelf) => <option key={shelf} value={shelf}>{shelf}</option>)}
           </select>
         </div>
+      </section>
+      <section className="stats-grid">
+        <Metric icon={<Archive />} label="Комірок" value={String(locations.length)} hint="підписані фізично" />
+        <Metric icon={<CheckCircle2 />} label="Вільно" value={String(free.length)} hint="система може запропонувати" />
+        <Metric icon={<PackageCheck />} label="Зайнято" value={String(occupied.length)} hint="не можна покласти вдруге" />
+        <Metric icon={<Search />} label="Пошук" value="Код / зона / полиця" hint="REPAIR-A-01 або READY" />
       </section>
       <section className="panel">
         <div className="panel-heading"><h2>Візуальна схема</h2><span>колір = зайнятість</span></div>
@@ -19767,13 +20620,48 @@ function StoragePage({ orders, locations, movementLogs }: { orders: ServiceOrder
 }
 
 function MovementsPage({ movements, productName }: { movements: StockMovement[]; productName: (id: string) => string }) {
+  const [movementSearch, setMovementSearch] = useState('');
+  const [movementFilter, setMovementFilter] = useState<'all' | 'arrival' | 'expense' | 'transfer'>('all');
+  const filteredMovements = movements.filter((movement) => {
+    const needle = movementSearch.trim().toLowerCase();
+    const matchesSearch = !needle || [
+      movement.date,
+      stockMovementTypeLabel(movement),
+      productName(movement.productId),
+      movement.actor,
+      movement.comment,
+      movement.basis,
+      movement.orderId,
+      movement.purchaseId,
+      movement.batchRefs,
+    ].join(' ').toLowerCase().includes(needle);
+    if (!matchesSearch) return false;
+    if (movementFilter === 'arrival') return movement.type === 'Прихід';
+    if (movementFilter === 'expense') return ['Списання', 'Повернення', 'Встановлення', 'Продаж'].includes(movement.type);
+    if (movementFilter === 'transfer') return movement.type === 'Переміщення';
+    return true;
+  });
   return (
     <div className="page-grid">
       <PageTitle eyebrow="Рух складу" title="Повна історія змін залишків" text="Кожна операція має тип, дату, запчастину, кількість і зв'язок із ремонтом або закупівлею." />
+      <section className="panel manager-orders-toolbar workspace-action-line">
+        <div className="manager-orders-toolbar-search workspace-action-main">
+          <div className="manager-orders-search-input workspace-action-search">
+            <input value={movementSearch} onChange={(event) => setMovementSearch(event.target.value)} placeholder="Пошук: товар / операція / дата / співробітник" />
+            <button type="button" className="manager-orders-search-button" aria-label="Пошук по руху складу">🔍</button>
+          </div>
+        </div>
+        <div className="manager-orders-toolbar-filter workspace-action-tools">
+          <button type="button" className={movementFilter === 'all' ? 'primary' : ''} onClick={() => setMovementFilter('all')}>Усі</button>
+          <button type="button" className={movementFilter === 'arrival' ? 'primary' : ''} onClick={() => setMovementFilter('arrival')}>Прихід</button>
+          <button type="button" className={movementFilter === 'expense' ? 'primary' : ''} onClick={() => setMovementFilter('expense')}>Списання</button>
+          <button type="button" className={movementFilter === 'transfer' ? 'primary' : ''} onClick={() => setMovementFilter('transfer')}>Переміщення</button>
+        </div>
+      </section>
       <section className="panel">
           <div className="table movement-table">
           <div className="table-row table-head"><span>Дата</span><span>Тип</span><span>Запчастина</span><span>К-сть</span><span>Партія</span><span>Ціна</span><span>Документ</span><span>Підстава</span><span>Хто</span><span>Коментар</span></div>
-          {movements.map((movement) => (
+          {filteredMovements.map((movement) => (
             <div className="table-row" key={movement.id}>
               <span>{movement.date}</span>
               <span>{stockMovementTypeLabel(movement)}</span>
@@ -19788,7 +20676,7 @@ function MovementsPage({ movements, productName }: { movements: StockMovement[];
             </div>
           ))}
         </div>
-        {movements.length === 0 && <div className="empty-state">Рухів ще немає.</div>}
+        {filteredMovements.length === 0 && <div className="empty-state">Рухів ще немає.</div>}
       </section>
     </div>
   );
@@ -19826,8 +20714,10 @@ function ClientsPage({
   notifications: ClientNotification[];
 }) {
   const importClientsInputRef = useRef<HTMLInputElement | null>(null);
+  const clientHistoryRef = useRef<HTMLDetailsElement | null>(null);
   const [clientSearch, setClientSearch] = useState('');
   const [selectedClientPhone, setSelectedClientPhone] = useState('');
+  const [isClientDetailOpen, setIsClientDetailOpen] = useState(false);
   const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([]);
   const [contractStartDate, setContractStartDate] = useState('');
   const [contractEndDate, setContractEndDate] = useState('');
@@ -19853,6 +20743,7 @@ function ClientsPage({
   };
   const focusClient = (phone: string) => {
     setSelectedClientPhone(phone);
+    setIsClientDetailOpen(true);
     onFocusedClientPhoneChange?.(phone);
   };
   const openClientEditor = (client?: ClientRecord) => {
@@ -19887,8 +20778,17 @@ function ClientsPage({
   }, [initialSearch]);
 
   useEffect(() => {
-    if (focusedClientPhone !== undefined) setSelectedClientPhone(focusedClientPhone);
+    if (focusedClientPhone !== undefined) {
+      setSelectedClientPhone(focusedClientPhone);
+      if (focusedClientPhone) setIsClientDetailOpen(true);
+    }
   }, [focusedClientPhone]);
+  useEffect(() => {
+    if (!selectedClientPhone) return;
+    window.requestAnimationFrame(() => {
+      document.getElementById(`client-row-${selectedClientPhone.replace(/\D/g, '')}`)?.scrollIntoView({ block: 'nearest' });
+    });
+  }, [selectedClientPhone]);
 
   async function handleClientsFileChange(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -19911,23 +20811,38 @@ function ClientsPage({
     if (clientFilter === 'idle') return clientOrders.length === 0;
     return true;
   });
-  const selectedClient = filteredClients.find((client) => client.phone === selectedClientPhone) ?? filteredClients[0] ?? clients[0];
+  const selectedClient = filteredClients.find((client) => client.phone === selectedClientPhone)
+    ?? clients.find((client) => client.phone === selectedClientPhone)
+    ?? null;
 
   return (
     <div className="page-grid clients-page">
       <PageTitle eyebrow="Клієнти" title="Клієнтська база сервісу" text="Пошук, борги, історія звернень і швидкий старт нового замовлення." />
-      <section className="panel manager-orders-toolbar clients-toolbar">
-        <div className="manager-orders-toolbar-filter">
+      <section className="panel manager-orders-toolbar workspace-action-line">
+        <div className="manager-orders-toolbar-search workspace-action-main">
+          <div className="manager-orders-search-input workspace-action-search">
+            <input
+              type="text"
+              value={clientSearch}
+              onChange={(event) => setClientSearch(event.target.value)}
+              placeholder="Пошук: телефон / ім'я / компанія / ЄДРПОУ / ІПН"
+            />
+            <button type="button" className="manager-orders-search-button" aria-label="Пошук клієнта">
+              🔍
+            </button>
+          </div>
+          <button type="button" className="submit-button workspace-primary-action" onClick={() => openClientEditor()}>+ Новий клієнт</button>
+        </div>
+        <div className="manager-orders-toolbar-filter workspace-action-tools">
           <input ref={importClientsInputRef} type="file" accept=".xlsx,.csv" onChange={handleClientsFileChange} style={{ display: 'none' }} />
           <button type="button" className={clientFilter === 'all' ? 'primary' : ''} onClick={() => setClientFilter('all')}>Усі</button>
           <button type="button" className={clientFilter === 'debt' ? 'primary' : ''} onClick={() => setClientFilter('debt')}>Борг</button>
           <button type="button" className={clientFilter === 'regular' ? 'primary' : ''} onClick={() => setClientFilter('regular')}>Постійні</button>
           <button type="button" className={clientFilter === 'idle' ? 'primary' : ''} onClick={() => setClientFilter('idle')}>Без замовлень</button>
           <button type="button" onClick={() => importClientsInputRef.current?.click()}>Імпорт</button>
-          <button type="button" className="submit-button clients-primary-action" onClick={() => openClientEditor()}>+ Новий клієнт</button>
         </div>
       </section>
-      <div className="manager-orders-workspace">
+      <div className="manager-orders-workspace clients-workspace">
         <section className="panel manager-orders-list clients-list-panel">
           <div className="panel-heading">
             <h2>Клієнти</h2>
@@ -19944,6 +20859,7 @@ function ClientsPage({
                   <button
                     type="button"
                     key={`${client.phone}-${client.email ?? index}`}
+                    id={`client-row-${client.phone.replace(/\D/g, '')}`}
                     className={`clients-list-row${selectedClient?.phone === client.phone ? ' is-selected' : ''}${clientDebt > 0 ? ' has-debt' : ''}`}
                     onClick={() => focusClient(client.phone)}
                     onKeyDown={(event) => {
@@ -19990,156 +20906,195 @@ function ClientsPage({
           </div>
         </section>
 
-        <section className="panel manager-order-focus">
-          {!selectedClient && <div className="empty-state">Оберіть клієнта зі списку.</div>}
-          {selectedClient && (() => {
-          const client = selectedClient;
-          const uncontractedOrders = clientUncontractedOrders(client, orders);
-          const uncontractedAmount = uncontractedOrders.reduce((sum, order) => sum + contractOrderAmount(order), 0);
-          const { totalDebt: clientDebt, debtOrdersCount } = clientDebtSummary(client, orders);
-          const normalizedTaxId = normalizeTaxId(client.taxId);
-          const incomingConfirmed = simplePayments
-            .filter((payment) => payment.status === 'подтвержден')
-            .filter((payment) => {
-              const paymentTaxId = normalizeTaxId(payment.clientTaxId ?? payment.taxId);
-              return (normalizedTaxId && paymentTaxId === normalizedTaxId) || payment.client.trim().toLowerCase() === client.name.trim().toLowerCase();
-            })
-            .reduce((sum, payment) => sum + payment.amount, 0);
-          const closedActsTotal = contractActs
-            .filter((act) => {
-              const contract = contracts.find((item) => item.id === act.contractId);
-              return contract?.client.trim().toLowerCase() === client.name.trim().toLowerCase();
-            })
-            .reduce((sum, act) => sum + act.amount, 0);
-          const clientBalance = incomingConfirmed - closedActsTotal;
-          const clientOrders = orders.filter((order) => isSameClientOrder(client, order)).sort((a, b) => (parseDateTime(b.intakeDate)?.getTime() ?? 0) - (parseDateTime(a.intakeDate)?.getTime() ?? 0));
-          const selectedOrders = uncontractedOrders.filter((order) => selectedOrderIds.includes(order.id));
-          const selectedAmount = selectedOrders.reduce((sum, order) => sum + contractOrderAmount(order), 0);
-          const lastOrder = clientOrders[0];
-          return (
-            <article className="client-card">
-              <div className="panel-heading">
-                <h2>{client.name}</h2>
-                <span>{clientTypeLabel(client.legalType)}</span>
-              </div>
-              <div className="clients-card-actions">
-                <button type="button" className="submit-button" onClick={() => openQuickOrderForClient(client)}>Нове замовлення</button>
-                <button type="button" onClick={() => openClientEditor(client)}>Редагувати клієнта</button>
-                <button type="button" onClick={() => { setMessageClient(client); messageClientRecord(client); }}>Повідомлення</button>
-              </div>
-              <div className="manager-order-bottom-meta clients-card-meta">
-                <div className="manager-order-field"><strong>Контакт</strong><div>{client.name}</div></div>
-                <div className="manager-order-field"><strong>Телефон</strong><div>{client.phone}</div></div>
-                <div className="manager-order-field"><strong>Telegram ID</strong><div>{client.telegramId || 'не вказано'}</div></div>
-                <div className="manager-order-field"><strong>Канал сповіщень</strong><div>{client.notificationChannel || 'sms'}</div></div>
-                <div className="manager-order-field"><strong>Email</strong><div>{client.email?.trim() || 'немає email'}</div></div>
-                <div className="manager-order-field"><strong>Тип</strong><div>{clientTypeLabel(client.legalType)}</div></div>
-                <div className="manager-order-field"><strong>ЄДРПОУ / ІПН</strong><div>{client.taxId || 'не вказано'}</div></div>
-                <div className="manager-order-field"><strong>Адреса</strong><div>{client.address || 'не вказано'}</div></div>
-                <div className="manager-order-field"><strong>Коментар</strong><div>{client.comment || 'без коментаря'}</div></div>
-                <div className="manager-order-field"><strong>Замовлення</strong><div>{clientOrders.length}</div></div>
-                <div className="manager-order-field"><strong>Борг</strong><div>{money(clientDebt)}</div></div>
-                <div className="manager-order-field"><strong>Останній заказ</strong><div>{lastOrder ? lastOrder.id : '—'}</div></div>
-                <div className="manager-order-field"><strong>Останнє звернення</strong><div>{lastOrder ? lastOrder.intakeDate : '—'}</div></div>
-                <div className="manager-order-field"><strong>Баланс</strong><div>{money(clientBalance)}</div></div>
-              </div>
-
-              <details className="manager-order-collapse" open>
-                <summary>Замовлення клієнта</summary>
-                <div className="clients-history-list">
-                  {clientOrders.map((order) => (
-                    <div className="clients-history-row" key={order.id}>
-                      <span>
-                        <strong>{order.id}</strong>
-                        <small>{order.intakeDate}</small>
-                      </span>
-                      <span>{order.device}</span>
-                      <span><span className={`manager-order-status-badge ${simpleRepairStatusClass(simpleRepairStatus(order.status))}`}>{managerOrderStatusLabel(order.status)}</span></span>
-                      <span>{money(contractOrderAmount(order))}</span>
-                      <span className={clientOrderDebt(order) > 0 ? 'clients-row-debt' : ''}>{money(clientOrderDebt(order))}</span>
+      </div>
+      {isClientDetailOpen && selectedClient && (() => {
+        const client = selectedClient;
+        const uncontractedOrders = clientUncontractedOrders(client, orders);
+        const uncontractedAmount = uncontractedOrders.reduce((sum, order) => sum + contractOrderAmount(order), 0);
+        const { totalDebt: clientDebt, debtOrdersCount } = clientDebtSummary(client, orders);
+        const normalizedTaxId = normalizeTaxId(client.taxId);
+        const incomingConfirmed = simplePayments
+          .filter((payment) => payment.status === 'подтвержден')
+          .filter((payment) => {
+            const paymentTaxId = normalizeTaxId(payment.clientTaxId ?? payment.taxId);
+            return (normalizedTaxId && paymentTaxId === normalizedTaxId) || payment.client.trim().toLowerCase() === client.name.trim().toLowerCase();
+          })
+          .reduce((sum, payment) => sum + payment.amount, 0);
+        const closedActsTotal = contractActs
+          .filter((act) => {
+            const contract = contracts.find((item) => item.id === act.contractId);
+            return contract?.client.trim().toLowerCase() === client.name.trim().toLowerCase();
+          })
+          .reduce((sum, act) => sum + act.amount, 0);
+        const clientBalance = incomingConfirmed - closedActsTotal;
+        const clientOrders = orders.filter((order) => isSameClientOrder(client, order)).sort((a, b) => (parseDateTime(b.intakeDate)?.getTime() ?? 0) - (parseDateTime(a.intakeDate)?.getTime() ?? 0));
+        const selectedOrders = uncontractedOrders.filter((order) => selectedOrderIds.includes(order.id));
+        const selectedAmount = selectedOrders.reduce((sum, order) => sum + contractOrderAmount(order), 0);
+        const lastOrder = clientOrders[0];
+        const normalizedClientPhone = extractDigits(client.phone);
+        const normalizedClientName = normalizeLooseText(client.name);
+        const clientNotifications = notifications.filter((notification) => (
+          (normalizedClientPhone && extractDigits(notification.phone) === normalizedClientPhone)
+          || normalizeLooseText(notification.client) === normalizedClientName
+          || notification.clientId === (normalizedClientPhone || normalizedClientName)
+        ));
+        return (
+          <div className="manager-order-modal-backdrop" onClick={() => setIsClientDetailOpen(false)}>
+            <section className="panel manager-order-focus manager-order-modal clients-modal clients-focus-modal" onClick={(event) => event.stopPropagation()}>
+              <article className="client-card clients-focus-card">
+                <div className="manager-order-card-header clients-focus-header">
+                  <div className="manager-order-card-title">
+                    <div className="panel-heading">
+                      <h2>{client.name}</h2>
+                      <span>{clientTypeLabel(client.legalType)}</span>
                     </div>
-                  ))}
-                  {clientOrders.length === 0 && <div className="empty-state">У клієнта ще немає замовлень.</div>}
-                </div>
-              </details>
-
-              <details className="manager-order-collapse">
-                <summary>Договори / борги / платежі</summary>
-                <div className="manager-order-bottom-meta">
-                  <div className="manager-order-field"><strong>Замовлень з боргом</strong><div>{debtOrdersCount}</div></div>
-                  <div className="manager-order-field"><strong>Вхідні платежі</strong><div>{money(incomingConfirmed)}</div></div>
-                  <div className="manager-order-field"><strong>Закрито актами</strong><div>{money(closedActsTotal)}</div></div>
-                </div>
-              </details>
-
-              {uncontractedOrders.length > 0 && (
-                <details className="manager-order-collapse">
-                  <summary>Створити договір із замовлень</summary>
-                  <div className="contracts-act-builder">
-                    <div className="contracts-act-builder-list">
-                      {uncontractedOrders.map((order) => (
-                        <label key={order.id} className="contracts-act-order">
-                          <input
-                            type="checkbox"
-                            checked={selectedOrderIds.includes(order.id)}
-                            onChange={(event) => {
-                              setSelectedOrderIds((current) => (
-                                event.target.checked
-                                  ? [...current, order.id]
-                                  : current.filter((id) => id !== order.id)
-                              ));
-                            }}
-                          />
-                          <span>{order.id}</span>
-                          <span>{order.device}</span>
-                          <strong>{money(contractOrderAmount(order))}</strong>
-                        </label>
-                      ))}
-                    </div>
-                    <div className="table">
-                      <label>
-                        Дата початку
-                        <input value={contractStartDate} onChange={(event) => setContractStartDate(event.target.value)} type="date" />
-                      </label>
-                      <label>
-                        Дата завершення
-                        <input value={contractEndDate} onChange={(event) => setContractEndDate(event.target.value)} type="date" />
-                      </label>
-                    </div>
-                    <div className="client-meta">
-                      <span>Сума договору</span>
-                      <strong>{money(selectedAmount)}</strong>
-                    </div>
-                    <div className="action-row">
-                      <button
-                        type="button"
-                        className="submit-button"
-                        onClick={() => {
-                          const created = createContractFromOrders({
-                            client: client.name,
-                            startDate: contractStartDate,
-                            endDate: contractEndDate,
-                            orderIds: selectedOrderIds,
-                          });
-                          if (created) {
-                            setSelectedOrderIds([]);
-                            setContractStartDate('');
-                            setContractEndDate('');
-                          }
-                        }}
-                        disabled={selectedOrderIds.length === 0}
-                      >
-                        Створити договір
-                      </button>
+                    <div className="clients-card-actions">
+                      <button type="button" className="submit-button" onClick={() => openQuickOrderForClient(client)}>Нове замовлення</button>
+                      <button type="button" onClick={() => openClientEditor(client)}>Редагувати клієнта</button>
+                      <button type="button" onClick={() => { setMessageClient(client); messageClientRecord(client); }}>Повідомлення</button>
+                      <button type="button" onClick={() => { if (clientHistoryRef.current) { clientHistoryRef.current.open = true; clientHistoryRef.current.scrollIntoView({ block: 'nearest' }); } }}>Історія замовлень</button>
                     </div>
                   </div>
-                </details>
-              )}
-            </article>
-          );
-          })()}
-        </section>
-      </div>
+                  <div className="manager-order-inline-actions">
+                    <button type="button" onClick={() => setIsClientDetailOpen(false)}>Закрити</button>
+                  </div>
+                </div>
+
+                <div className="manager-order-focus-layout">
+                  <div className="manager-order-focus-main">
+                    <div className="manager-order-bottom-meta clients-card-meta">
+                      <div className="manager-order-field"><strong>Контакт</strong><div>{client.name}</div></div>
+                      <div className="manager-order-field"><strong>Телефон</strong><div>{client.phone}</div></div>
+                      <div className="manager-order-field"><strong>Telegram ID</strong><div>{client.telegramId || 'не вказано'}</div></div>
+                      <div className="manager-order-field"><strong>Канал сповіщень</strong><div>{client.notificationChannel || 'sms'}</div></div>
+                      <div className="manager-order-field"><strong>Email</strong><div>{client.email?.trim() || 'немає email'}</div></div>
+                      <div className="manager-order-field"><strong>Тип</strong><div>{clientTypeLabel(client.legalType)}</div></div>
+                      <div className="manager-order-field"><strong>ЄДРПОУ / ІПН</strong><div>{client.taxId || 'не вказано'}</div></div>
+                      <div className="manager-order-field"><strong>Адреса</strong><div>{client.address || 'не вказано'}</div></div>
+                      <div className="manager-order-field"><strong>Коментар</strong><div>{client.comment || 'без коментаря'}</div></div>
+                      <div className="manager-order-field"><strong>Замовлення</strong><div>{clientOrders.length}</div></div>
+                      <div className="manager-order-field"><strong>Борг</strong><div>{money(clientDebt)}</div></div>
+                      <div className="manager-order-field"><strong>Останній заказ</strong><div>{lastOrder ? lastOrder.id : '—'}</div></div>
+                      <div className="manager-order-field"><strong>Останнє звернення</strong><div>{lastOrder ? lastOrder.intakeDate : '—'}</div></div>
+                      <div className="manager-order-field"><strong>Баланс</strong><div>{money(clientBalance)}</div></div>
+                    </div>
+
+                    <details className="manager-order-collapse" open ref={clientHistoryRef}>
+                      <summary>Замовлення клієнта</summary>
+                      <div className="clients-history-list">
+                        {clientOrders.map((order) => (
+                          <div className="clients-history-row" key={order.id}>
+                            <span>
+                              <strong>{order.id}</strong>
+                              <small>{order.intakeDate}</small>
+                            </span>
+                            <span>{order.device}</span>
+                            <span><span className={`manager-order-status-badge ${simpleRepairStatusClass(simpleRepairStatus(order.status))}`}>{managerOrderStatusLabel(order.status)}</span></span>
+                            <span>{money(contractOrderAmount(order))}</span>
+                            <span className={clientOrderDebt(order) > 0 ? 'clients-row-debt' : ''}>{money(clientOrderDebt(order))}</span>
+                          </div>
+                        ))}
+                        {clientOrders.length === 0 && <div className="empty-state">У клієнта ще немає замовлень.</div>}
+                      </div>
+                    </details>
+
+                    {uncontractedOrders.length > 0 && (
+                      <details className="manager-order-collapse">
+                        <summary>Створити договір із замовлень</summary>
+                        <div className="contracts-act-builder">
+                          <div className="contracts-act-builder-list">
+                            {uncontractedOrders.map((order) => (
+                              <label key={order.id} className="contracts-act-order">
+                                <input
+                                  type="checkbox"
+                                  checked={selectedOrderIds.includes(order.id)}
+                                  onChange={(event) => {
+                                    setSelectedOrderIds((current) => (
+                                      event.target.checked
+                                        ? [...current, order.id]
+                                        : current.filter((id) => id !== order.id)
+                                    ));
+                                  }}
+                                />
+                                <span>{order.id}</span>
+                                <span>{order.device}</span>
+                                <strong>{money(contractOrderAmount(order))}</strong>
+                              </label>
+                            ))}
+                          </div>
+                          <div className="table">
+                            <label>
+                              Дата початку
+                              <input value={contractStartDate} onChange={(event) => setContractStartDate(event.target.value)} type="date" />
+                            </label>
+                            <label>
+                              Дата завершення
+                              <input value={contractEndDate} onChange={(event) => setContractEndDate(event.target.value)} type="date" />
+                            </label>
+                          </div>
+                          <div className="client-meta">
+                            <span>Сума договору</span>
+                            <strong>{money(selectedAmount)}</strong>
+                          </div>
+                          <div className="action-row">
+                            <button
+                              type="button"
+                              className="submit-button"
+                              onClick={() => {
+                                const created = createContractFromOrders({
+                                  client: client.name,
+                                  startDate: contractStartDate,
+                                  endDate: contractEndDate,
+                                  orderIds: selectedOrderIds,
+                                });
+                                if (created) {
+                                  setSelectedOrderIds([]);
+                                  setContractStartDate('');
+                                  setContractEndDate('');
+                                }
+                              }}
+                              disabled={selectedOrderIds.length === 0}
+                            >
+                              Створити договір
+                            </button>
+                            <span>Без договора: {money(uncontractedAmount)}</span>
+                          </div>
+                        </div>
+                      </details>
+                    )}
+                  </div>
+
+                  <div className="manager-order-focus-side">
+                    <details className="manager-order-collapse" open>
+                      <summary>Договори / борги / платежі</summary>
+                      <div className="manager-order-bottom-meta">
+                        <div className="manager-order-field"><strong>Замовлень з боргом</strong><div>{debtOrdersCount}</div></div>
+                        <div className="manager-order-field"><strong>Вхідні платежі</strong><div>{money(incomingConfirmed)}</div></div>
+                        <div className="manager-order-field"><strong>Закрито актами</strong><div>{money(closedActsTotal)}</div></div>
+                      </div>
+                    </details>
+
+                    <details className="manager-order-collapse" open>
+                      <summary>Історія повідомлень</summary>
+                      <div className="task-list">
+                        {clientNotifications.map((notification) => (
+                          <Task
+                            key={notification.id}
+                            icon={<Bell />}
+                            title={`${notification.channel} · ${notification.status}`}
+                            text={`${notification.createdAt} · ${notification.message}`}
+                          />
+                        ))}
+                        {clientNotifications.length === 0 && <div className="empty-state">Повідомлень ще не було.</div>}
+                      </div>
+                    </details>
+                  </div>
+                </div>
+              </article>
+            </section>
+          </div>
+        );
+      })()}
       {clientEditor && (
         <div className="manager-order-modal-backdrop" onClick={() => setClientEditor(null)}>
           <section className="panel manager-order-focus manager-order-modal clients-modal" onClick={(event) => event.stopPropagation()}>
