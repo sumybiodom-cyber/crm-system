@@ -153,12 +153,16 @@ button {
   padding: 16px 24px 40px;
 }
 
-.workspace-shell-with-assistant {
-  padding-right: calc(24px + var(--assistant-offset, 0px));
+.workspace-main {
+  min-width: 0;
 }
 
-.workspace-shell-assistant-fullscreen {
-  padding-right: 24px;
+.workspace-main-with-assistant {
+  padding-right: var(--assistant-offset, 0px);
+}
+
+.workspace-main-assistant-fullscreen {
+  padding-right: 0;
 }
 
 .topbar {

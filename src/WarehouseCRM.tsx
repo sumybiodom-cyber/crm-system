@@ -11572,10 +11572,7 @@ useEffect(() => {
   }
   return (
     <div className="app-shell">
-      <main
-        className={`workspace${isAssistantVisible ? ' workspace-shell-with-assistant' : ''}${isAssistantVisible && assistantMode === 'fullscreen' ? ' workspace-shell-assistant-fullscreen' : ''}`}
-        style={{ ['--assistant-offset' as string]: `${assistantContentOffset}px` }}
-      >
+      <main className="workspace">
         <header className="topbar">
           <button className="icon-button mobile-only" onClick={() => setShowMenu(!showMenu)} aria-label="Відкрити меню">
             {showMenu ? <X size={20} /> : <Menu size={20} />}
@@ -11707,7 +11704,10 @@ useEffect(() => {
             <LogOut size={18} />
           </button>
         </header>
-
+        <div
+          className={`workspace-main${isAssistantVisible ? ' workspace-main-with-assistant' : ''}${isAssistantVisible && assistantMode === 'fullscreen' ? ' workspace-main-assistant-fullscreen' : ''}`}
+          style={{ ['--assistant-offset' as string]: `${assistantContentOffset}px` }}
+        >
         {isNotificationsOpen && (
           <section className="panel notification-inline-panel" aria-label="Повідомлення менеджера">
             <div className="notification-inline-header">
@@ -12434,6 +12434,7 @@ useEffect(() => {
               </div>
             </aside>
           )}
+        </div>
         </div>
       </main>
     </div>
