@@ -15950,7 +15950,17 @@ function OrdersPage(props: {
                       <span className="manager-order-id-badge">{order.id}</span>
                       <span className="manager-order-device-icon" aria-hidden="true">{deviceIcon(order.device)}</span>
                       <span className="manager-order-primary-copy">
-                        <span className="manager-order-client-text">{order.client}</span>
+                        <button
+                          type="button"
+                          className="manager-order-client-link manager-order-client-text"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            props.openClientRecord(order.phone, order.client);
+                          }}
+                          title="Відкрити клієнта"
+                        >
+                          {order.client}
+                        </button>
                         <span className="manager-order-device-text">{order.device}</span>
                       </span>
                     </span>

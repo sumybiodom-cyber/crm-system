@@ -2336,6 +2336,26 @@ button {
   text-overflow: ellipsis;
 }
 
+.manager-order-client-link {
+  display: inline-block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition: color 0.2s ease;
+}
+
+.manager-order-client-link:hover {
+  color: #2563eb;
+}
+
+.manager-order-client-link:focus-visible {
+  outline: 2px solid rgba(37, 99, 235, 0.35);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
 .manager-order-cell-status {
   justify-self: start;
 }
