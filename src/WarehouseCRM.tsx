@@ -3015,6 +3015,10 @@ function uid(prefix: string) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 }
 
+function clampNumber(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
 function available(product: Product) {
   return Math.max(product.stock - product.reserved, 0);
 }
@@ -5196,9 +5200,14 @@ useEffect(() => {
   const [assistantInput, setAssistantInput] = useState('');
   const [assistantMessages, setAssistantMessages] = useState<AssistantMessage[]>([]);
   const [isAssistantLoading, setIsAssistantLoading] = useState(false);
+  const [assistantViewportWidth, setAssistantViewportWidth] = useState(() => (typeof window === 'undefined' ? 1440 : window.innerWidth));
+  const [assistantWidth, setAssistantWidth] = useState(460);
+  const [assistantMode, setAssistantMode] = useState<'default' | 'wide' | 'fullscreen'>('default');
+  const [isAssistantResizing, setIsAssistantResizing] = useState(false);
   const [assistantDashboardRequest, setAssistantDashboardRequest] = useState<AssistantDashboardRequest | null>(null);
   const assistantLogRef = useRef<HTMLDivElement | null>(null);
   const assistantEndRef = useRef<HTMLDivElement | null>(null);
+  const assistantResizeStartWidthRef = useRef(460);
 
   const sessionUserRecord = users.find((user) => user.id === sessionUserId) ?? null;
   const activeUserRecord = users.find((user) => user.id === activeUserId) ?? sessionUserRecord;
@@ -5947,6 +5956,23 @@ useEffect(() => {
   const assistantSelectedOrder = orders.find((order) => order.id === selectedOrderId) ?? null;
   const assistantContextSummary = `${roleDisplay(viewUser.role)} · ${assistantPageLabel}`;
   const assistantTimestamp = () => new Date().toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' });
+  const isAssistantInlineLayout = assistantViewportWidth <= 1240;
+  const assistantMinWidth = 420;
+  const assistantMaxWidth = 760;
+  const assistantWideWidth = 520;
+  const assistantFullscreenWidth = clampNumber(assistantViewportWidth - 48, assistantWideWidth, 980);
+  const assistantPanelWidth = isAssistantCollapsed
+    ? 56
+    : assistantMode === 'fullscreen'
+      ? assistantFullscreenWidth
+      : assistantMode === 'wide'
+        ? Math.max(assistantWidth, assistantWideWidth)
+        : assistantWidth;
+  const assistantContentOffset = !isAssistantVisible || isAssistantInlineLayout
+    ? 0
+    : isAssistantCollapsed
+      ? 72
+      : assistantPanelWidth + 40;
   const pushAssistantMessages = (entries: AssistantMessage[]) => {
     setAssistantMessages((current) => [...current, ...entries].slice(-24));
   };
@@ -6001,6 +6027,95 @@ useEffect(() => {
     salary: canDo('profit.view') || canViewPage('payroll'),
     cost: canDo('cost.view'),
   }), [canDo, canViewPage]);
+  const assistantUiContext = useMemo(() => {
+    const common = {
+      searchPlaceholder: '',
+      availableActions: [] as string[],
+      availableFilters: [] as string[],
+      availableTabs: visibleNavItems.map((item) => item.label),
+    };
+    if (page === 'dashboard') {
+      return {
+        ...common,
+        searchPlaceholder: 'Пошук: номер / телефон / клієнт / пристрій',
+        availableActions: ['+ Нове замовлення', 'Відкрити', 'Редагувати', 'Видати'],
+        availableFilters: ['Усі', 'Прийнято', 'В ремонті', 'Готово', 'Видано', 'Борг', 'Очікує оплату'],
+      };
+    }
+    if (page === 'orders') {
+      return {
+        ...common,
+        searchPlaceholder: 'Пошук: номер / телефон / клієнт / пристрій',
+        availableActions: ['Відкрити', 'Оплата', 'Друк', 'Видати', 'Редагувати'],
+        availableFilters: ['Усі замовлення'],
+      };
+    }
+    if (page === 'my-orders') {
+      return {
+        ...common,
+        searchPlaceholder: 'Пошук: номер / клієнт / пристрій',
+        availableActions: ['Відкрити', 'Змінити статус', 'Додати роботи', 'Додати запчастину'],
+        availableFilters: ['Мої замовлення'],
+      };
+    }
+    if (page === 'clients') {
+      return {
+        ...common,
+        searchPlaceholder: 'Пошук: телефон / ім’я / компанія / ЄДРПОУ',
+        availableActions: ['+ Новий клієнт', 'Нове замовлення', 'Редагувати клієнта', 'Повідомлення', 'Історія замовлень', 'Імпорт'],
+        availableFilters: ['Усі', 'Борг', 'Постійні', 'Без замовлень'],
+      };
+    }
+    if (page === 'parts') {
+      return {
+        ...common,
+        searchPlaceholder: 'Пошук: запчастина / артикул / barcode / постачальник / місце',
+        availableActions: ['+ Прийняти товар', 'Сканер', 'Імпорт', 'Перемістити', 'Відкрити товар'],
+        availableFilters: ['Резерв', 'Дефіцит', 'Наявність'],
+      };
+    }
+    if (page === 'purchases') {
+      return {
+        ...common,
+        searchPlaceholder: 'Пошук: постачальник / документ / товар / сума',
+        availableActions: ['+ Нова закупівля', 'Підтвердити прихід', 'Постачальники', 'Прихідна'],
+        availableFilters: ['Усі', 'Борг', 'Оплачено'],
+      };
+    }
+    if (page === 'storage') {
+      return {
+        ...common,
+        searchPlaceholder: 'Пошук: код / зона / полиця / замовлення',
+        availableActions: ['+ Нова комірка', 'Відкрити замовлення'],
+        availableFilters: ['Усі', 'Вільні', 'Зайняті', 'Усі зони', 'Усі стелажі', 'Усі полиці'],
+      };
+    }
+    if (page === 'movements') {
+      return {
+        ...common,
+        searchPlaceholder: 'Пошук: товар / операція / дата / співробітник',
+        availableActions: ['Експорт', 'Переглянути рух'],
+        availableFilters: ['Усі операції'],
+      };
+    }
+    if (page === 'finance' || page === 'cash') {
+      return {
+        ...common,
+        searchPlaceholder: 'Пошук: платіж / борг / документ / клієнт',
+        availableActions: ['Прийняти оплату', 'Додати витрату', 'Відкрити борги клієнтів'],
+        availableFilters: ['За день', 'За місяць', 'За період'],
+      };
+    }
+    if (page === 'documents') {
+      return {
+        ...common,
+        searchPlaceholder: 'Пошук: документ / замовлення / клієнт / статус',
+        availableActions: ['Друк / PDF', 'Позначити відправленим', 'Позначити підписаним', 'Не підписано'],
+        availableFilters: ['Усі документи'],
+      };
+    }
+    return common;
+  }, [page, visibleNavItems]);
   const assistantActiveObject = useMemo(() => {
     if (page === 'dashboard' || page === 'orders' || page === 'my-orders') {
       if (!assistantSelectedOrder) return null;
@@ -6048,6 +6163,7 @@ useEffect(() => {
     page,
     allowedPages: visibleNavItems.map((item) => item.label),
     permissions: assistantPermissionContext,
+    ui: assistantUiContext,
     activeObject: assistantActiveObject,
     session: {
       sessionUserId,
@@ -6055,7 +6171,7 @@ useEffect(() => {
       userSessionStatus: activeUser.session,
       isSessionLocked,
     },
-  }), [activeUser.session, activeUserId, assistantActiveObject, assistantPageLabel, assistantPermissionContext, isSessionLocked, page, sessionUserId, viewUser.role, visibleNavItems]);
+  }), [activeUser.session, activeUserId, assistantActiveObject, assistantPageLabel, assistantPermissionContext, assistantUiContext, isSessionLocked, page, sessionUserId, viewUser.role, visibleNavItems]);
 
   useEffect(() => {
     if (assistantMessages.length > 0) return;
@@ -6082,6 +6198,28 @@ useEffect(() => {
       }
     });
   }, [assistantMessages, isAssistantCollapsed, isAssistantVisible]);
+
+  useEffect(() => {
+    const handleResize = () => setAssistantViewportWidth(window.innerWidth);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  useEffect(() => {
+    if (!isAssistantResizing || isAssistantInlineLayout || isAssistantCollapsed) return;
+    const handleMove = (event: MouseEvent) => {
+      const nextWidth = clampNumber(window.innerWidth - event.clientX - 24, assistantMinWidth, assistantMaxWidth);
+      setAssistantMode('default');
+      setAssistantWidth(nextWidth);
+    };
+    const handleUp = () => setIsAssistantResizing(false);
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', handleUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('mouseup', handleUp);
+    };
+  }, [assistantMaxWidth, assistantMinWidth, isAssistantCollapsed, isAssistantInlineLayout, isAssistantResizing]);
 
   function internalMessageTypeLabel(message: InternalMessage) {
     const text = message.text.toLowerCase();
@@ -11621,7 +11759,10 @@ useEffect(() => {
         </nav>
 
         <ToastStack toasts={toasts} onDismiss={(id) => setToasts((current) => current.filter((toast) => toast.id !== id))} />
-        <div className={`workspace-body${isAssistantVisible ? ' workspace-body-with-assistant' : ''}${isAssistantVisible && isAssistantCollapsed ? ' workspace-body-assistant-collapsed' : ''}`}>
+        <div
+          className={`workspace-body${isAssistantVisible ? ' workspace-body-with-assistant' : ''}${isAssistantVisible && isAssistantCollapsed ? ' workspace-body-assistant-collapsed' : ''}`}
+          style={{ ['--assistant-offset' as string]: `${assistantContentOffset}px` }}
+        >
           <div className="workspace-content">
             {!canViewPage(page) && <AccessDenied activeUser={viewUser} page={page} />}
             {canViewPage(page) && page === 'dashboard' && viewUser.role === 'Менеджер' && (
@@ -12171,7 +12312,11 @@ useEffect(() => {
             </footer>
           </div>
           {isAssistantVisible && (
-            <aside className={`workspace-assistant${isAssistantCollapsed ? ' workspace-assistant-collapsed' : ''}`} aria-label="Глобальний AI-помічник CRM">
+            <aside
+              className={`workspace-assistant${isAssistantCollapsed ? ' workspace-assistant-collapsed' : ''}${assistantMode === 'fullscreen' ? ' workspace-assistant-fullscreen' : ''}`}
+              aria-label="Глобальний AI-помічник CRM"
+              style={isAssistantInlineLayout || isAssistantCollapsed ? undefined : { width: `${assistantPanelWidth}px` }}
+            >
               <div className="workspace-assistant-panel">
                 {isAssistantCollapsed ? (
                   <button
@@ -12185,12 +12330,37 @@ useEffect(() => {
                   </button>
                 ) : (
                   <>
+                    {!isAssistantInlineLayout && (
+                      <button
+                        type="button"
+                        className="workspace-assistant-resizer"
+                        aria-label="Змінити ширину AI панелі"
+                        onMouseDown={() => {
+                          assistantResizeStartWidthRef.current = assistantPanelWidth;
+                          setIsAssistantResizing(true);
+                        }}
+                      />
+                    )}
                     <div className="workspace-assistant-head">
                       <div className="workspace-assistant-title">
                         <strong>AI Assistant</strong>
                         <span>{assistantContextSummary}</span>
                       </div>
                       <div className="workspace-assistant-head-actions">
+                        <button
+                          type="button"
+                          className="workspace-assistant-head-button"
+                          onClick={() => setAssistantMode((current) => current === 'wide' ? 'default' : 'wide')}
+                        >
+                          {assistantMode === 'wide' ? 'Звичайний' : 'Розширити'}
+                        </button>
+                        <button
+                          type="button"
+                          className="workspace-assistant-head-button"
+                          onClick={() => setAssistantMode((current) => current === 'fullscreen' ? 'default' : 'fullscreen')}
+                        >
+                          {assistantMode === 'fullscreen' ? 'Звичайний' : 'На весь екран'}
+                        </button>
                         <button type="button" className="workspace-assistant-head-button" onClick={() => setIsAssistantCollapsed(true)}>
                           Згорнути
                         </button>
@@ -12202,6 +12372,7 @@ useEffect(() => {
                     <div className="workspace-assistant-context">
                       <span>Роль: {roleDisplay(viewUser.role)}</span>
                       <span>Розділ: {assistantPageLabel}</span>
+                      {assistantUiContext.searchPlaceholder && <span>Пошук: {assistantUiContext.searchPlaceholder}</span>}
                       {assistantSelectedOrder && <span>Заказ: {assistantSelectedOrder.id}</span>}
                     </div>
                     <div className="workspace-assistant-log" ref={assistantLogRef}>

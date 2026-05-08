@@ -8,3 +8,5 @@ vite-dev.err.log
 *.temp
 Thumbs.db
 .DS_Store
+
+.vercel

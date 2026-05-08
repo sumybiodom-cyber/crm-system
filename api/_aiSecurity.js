@@ -154,6 +154,21 @@ function sanitizeHistory(history) {
   }));
 }
 
+function sanitizeUiContext(ui) {
+  const safeUi = ui && typeof ui === 'object' ? ui : {};
+  const sanitizeList = (value, maxItems = 30) => (
+    Array.isArray(value)
+      ? value.map((item) => normalizeText(item, 120)).filter(Boolean).slice(0, maxItems)
+      : []
+  );
+  return {
+    searchPlaceholder: normalizeText(safeUi.searchPlaceholder, 200),
+    availableActions: sanitizeList(safeUi.availableActions),
+    availableFilters: sanitizeList(safeUi.availableFilters),
+    availableTabs: sanitizeList(safeUi.availableTabs),
+  };
+}
+
 function sanitizeContext(context) {
   const safeContext = context && typeof context === 'object' ? context : {};
   const allowedPages = Array.isArray(safeContext.allowedPages)
@@ -174,6 +189,7 @@ function sanitizeContext(context) {
     page: normalizeText(safeContext.page, 80),
     allowedPages,
     activeObject,
+    ui: sanitizeUiContext(safeContext.ui),
     session: safeContext.session && typeof safeContext.session === 'object'
       ? {
           sessionUserId: normalizeText(safeContext.session.sessionUserId, 120),
