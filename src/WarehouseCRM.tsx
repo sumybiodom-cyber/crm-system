@@ -39,6 +39,8 @@ type Page = 'dashboard' | 'inbox' | 'employee-control' | 'contracts' | 'bank-imp
 type ManagerDashboardFilter = 'none' | 'all' | 'Прийнято' | 'В ремонті' | 'Готово' | 'Видано' | 'Борг' | 'Очікує оплату';
 type PaymentMethod = 'Готівка' | 'Картка' | 'Безготівка' | 'Змішана';
 type PaymentType = 'Передплата' | 'Часткова оплата' | 'Повна оплата' | 'Доплата' | 'Повернення коштів';
+type IntakeOrderType = 'ремонт' | 'продаж' | 'заправка картриджа' | 'діагностика';
+type IntakeDeviceType = 'ноутбук' | 'принтер' | 'картридж' | 'інше';
 type SaleStatus = 'Чернетка' | 'Зарезервовано' | 'Очікує оплати' | 'Частково оплачено' | 'Оплачено' | 'Видано' | 'Закрито' | 'Скасовано' | 'Повернення';
 
 type RepairPaymentStatus = 'Не оплачено' | 'Передплата' | 'Частково оплачено' | 'Повністю оплачено' | 'Повернення' | 'Борг';
@@ -321,9 +323,15 @@ type ServiceOrder = {
   qrUrl: string;
   client: string;
   phone: string;
+  clientEmail?: string;
+  clientTaxId?: string;
+  orderType?: IntakeOrderType;
+  deviceType?: IntakeDeviceType;
   device: string;
+  brandModel?: string;
   serial: string;
   issue: string;
+  complectation?: string;
   appearance?: string;
   intakeComment?: string;
   estimatedAmount?: number;
@@ -5236,11 +5244,18 @@ useEffect(() => {
   const [quickPhone, setQuickPhone] = useState('');
   const [quickClientDebtWarning, setQuickClientDebtWarning] = useState('');
   const [quickClientName, setQuickClientName] = useState('');
+  const [quickClientEmail, setQuickClientEmail] = useState('');
+  const [quickClientTaxId, setQuickClientTaxId] = useState('');
+  const [quickOrderType, setQuickOrderType] = useState<IntakeOrderType>('ремонт');
+  const [quickDeviceType, setQuickDeviceType] = useState<IntakeDeviceType>('ноутбук');
   const [quickDevice, setQuickDevice] = useState('');
+  const [quickBrandModel, setQuickBrandModel] = useState('');
   const [quickSerial, setQuickSerial] = useState('');
   const [quickProblem, setQuickProblem] = useState('');
+  const [quickComplectation, setQuickComplectation] = useState('');
   const [quickAppearance, setQuickAppearance] = useState('');
   const [quickEstimatedAmount, setQuickEstimatedAmount] = useState('');
+  const [quickPrepayment, setQuickPrepayment] = useState('');
   const [quickEngineerId, setQuickEngineerId] = useState('');
   const [quickContractId, setQuickContractId] = useState('');
   const [quickLocationCode, setQuickLocationCode] = useState('');
@@ -5626,6 +5641,7 @@ useEffect(() => {
     const normalizedPhone = normalizeImportedPhone(payload.phone);
     const originalPhone = normalizeImportedPhone(payload.originalPhone);
     const normalizedTaxId = normalizeTaxId(payload.taxId);
+    const normalizedEmail = payload.email?.trim().toLowerCase() ?? '';
     const nextClient: ClientRecord = {
       name: payload.name.trim(),
       phone: normalizedPhone,
@@ -5645,6 +5661,15 @@ useEffect(() => {
     }
     let saved = false;
     setCustomerList((current) => {
+      const duplicate = current.find((client) => {
+        const sameOriginal = originalPhone && normalizeImportedPhone(client.phone) === originalPhone;
+        if (sameOriginal) return false;
+        const samePhone = normalizedPhone && normalizeImportedPhone(client.phone) === normalizedPhone;
+        const sameEmail = normalizedEmail && (client.email ?? '').trim().toLowerCase() === normalizedEmail;
+        const sameTaxId = normalizedTaxId && normalizeTaxId(client.taxId) === normalizedTaxId;
+        return samePhone || sameEmail || sameTaxId;
+      });
+      if (duplicate) return current;
       const existing = current.find((client) => {
         const sameOriginal = originalPhone && normalizeImportedPhone(client.phone) === originalPhone;
         const samePhone = normalizeImportedPhone(client.phone) === normalizedPhone;
@@ -5664,7 +5689,9 @@ useEffect(() => {
     });
     if (saved) {
       setGlobalFocusedClientPhone(normalizedPhone);
-      setNotice(originalPhone ? `Картку клієнта ${nextClient.name} оновлено.` : `Клієнта ${nextClient.name} створено.`);
+      setNotice(`Клієнта збережено: ${nextClient.name}.`);
+    } else {
+      setNotice('Клієнт з таким телефоном, email або ЄДРПОУ / ІПН уже існує.');
     }
     return saved;
   }
@@ -5672,11 +5699,24 @@ useEffect(() => {
   function openQuickOrderForClient(client: ClientRecord) {
     handleQuickPhoneChange(client.phone);
     setQuickClientName(client.name);
-    setPage('dashboard');
+    setQuickClientEmail(client.email ?? '');
+    setQuickClientTaxId(client.taxId ?? '');
+    setQuickOrderType('ремонт');
+    setQuickDeviceType('ноутбук');
+    setQuickDevice('');
+    setQuickBrandModel('');
+    setQuickSerial('');
+    setQuickProblem('');
+    setQuickComplectation('');
+    setQuickAppearance('');
+    setQuickEstimatedAmount('');
+    setQuickPrepayment('');
+    setQuickComment('');
+    setPage(canViewPage('dashboard') ? 'dashboard' : canViewPage('orders') ? 'orders' : 'clients');
     setGlobalFocusedClientPhone(client.phone);
     setGlobalClientSearch(client.name);
     setOpenQuickOrderRequest((current) => current + 1);
-    setNotice(`Клієнта ${client.name} підставлено у нове замовлення.`);
+    setNotice(`Клієнта ${client.name} підставлено у форму нового замовлення.`);
   }
 
   function messageClientRecord(client: ClientRecord) {
@@ -6490,10 +6530,10 @@ useEffect(() => {
         text: 'Ось короткий робочий сценарій для прийому нового замовлення без звернення до адміністратора.',
         context: assistantContextSummary,
         steps: [
-          'Натисніть "Нове замовлення".',
-          'Введіть телефон клієнта та перевірте, чи він уже є в базі.',
-          'Заповніть пристрій, проблему та коментар прийому.',
-          'Призначте інженера або залиште замовлення на первинний контроль.',
+          'Якщо клієнт уже є в базі: відкрийте "Клієнти", оберіть клієнта і натисніть "Прийняти замовлення".',
+          'CRM підставить імʼя, телефон, email і ЄДРПОУ / ІПН без повторного пошуку.',
+          'Заповніть тип замовлення, пристрій, бренд / модель, серійний номер, несправність, комплектацію і зовнішній стан.',
+          'Вкажіть попередню вартість, передоплату, менеджера, інженера і коментар.',
           'Натисніть "Зберегти замовлення".',
         ],
         actions: [{ label: 'Нове замовлення', tone: 'primary' as const, run: () => openAssistantCreateOrder() }],
@@ -6538,7 +6578,8 @@ useEffect(() => {
         steps: [
           'Введіть телефон або імʼя клієнта.',
           'Якщо є точний збіг, я зможу відкрити картку клієнта.',
-          'Для деталізації переходьте в розділ "Клієнти".',
+          'Щоб прийняти замовлення від клієнта, відкрийте його картку і натисніть "Прийняти замовлення".',
+          'Форма нового замовлення відкриється з підставленими даними клієнта.',
         ],
         actions: canViewPage('clients') ? [{ label: 'Відкрити клієнтів', tone: 'primary' as const, run: () => setPage('clients') }] : undefined,
       };
@@ -6749,7 +6790,7 @@ useEffect(() => {
     if (hasAny(['оформи замовлення', 'створи замовлення', 'нове замовлення', 'новый заказ', 'прийняти замовлення', 'принять заказ'])) {
       if (!canOpen(viewUser.role === 'Менеджер' ? 'dashboard' : canViewPage('orders') ? 'orders' : 'my-orders', 'У вас немає доступу до створення замовлення.')) return;
       openAssistantCreateOrder();
-      reply('AI Command Bar: нове замовлення', 'Відкрив форму "Нове замовлення".', ['Оберіть клієнта, пристрій, несправність та інженера.', 'CRM створить замовлення тільки після вашого збереження.']);
+      reply('AI Command Bar: нове замовлення', 'Відкрив форму "Нове замовлення". Якщо стартуєте з клієнта, відкрийте "Клієнти" → оберіть клієнта → "Прийняти замовлення", і CRM підставить його дані автоматично.', ['Оберіть тип замовлення, пристрій, бренд / модель, несправність, комплектацію, стан, вартість, передоплату та інженера.', 'CRM створить замовлення тільки після вашого збереження.']);
       return;
     }
 
@@ -7845,9 +7886,13 @@ useEffect(() => {
       const debt = clientOutstandingDebtByPhone(found.phone);
       setQuickClientDebtWarning(debt > 0 ? `У клієнта є борг: ${money(debt)}` : '');
       setQuickClientName(found.name);
+      setQuickClientEmail(found.email ?? '');
+      setQuickClientTaxId(found.taxId ?? '');
       return;
     }
     setQuickClientDebtWarning('');
+    setQuickClientEmail('');
+    setQuickClientTaxId('');
   }
 
   function createQuickOrder() {
@@ -7856,8 +7901,10 @@ useEffect(() => {
     const selectedContract = contracts.find((contract) => contract.id === quickContractId);
     const normalizedPhone = quickPhone.trim();
     const fallbackClientName = selectedContract?.client || quickClientName.trim() || `Клієнт ${normalizedPhone}`;
-    if (!normalizedPhone || !quickDevice.trim() || !quickProblem.trim()) {
-      setNotice('Створення замовлення: заповніть телефон, пристрій і проблему.');
+    const brandModel = quickBrandModel.trim();
+    const deviceLabel = quickDevice.trim() || [quickDeviceType, brandModel].filter(Boolean).join(' ');
+    if (!normalizedPhone || !deviceLabel.trim() || !quickProblem.trim()) {
+      setNotice('Створення замовлення: заповніть телефон, пристрій / модель і проблему.');
       return;
     }
     const suggestedRepairLocation = quickLocationCode.trim() || suggestFreeLocation('REPAIR');
@@ -7867,11 +7914,34 @@ useEffect(() => {
     }, 1040) + 1;
     const orderId = `ЗН-${nextNumber}`;
     const estimatedAmount = Number(quickEstimatedAmount);
+    const prepaymentAmount = Number(quickPrepayment);
+    const prepayment: Payment | undefined = Number.isFinite(prepaymentAmount) && prepaymentAmount > 0
+      ? {
+          id: uid('PAY'),
+          date: today,
+          amount: prepaymentAmount,
+          method: 'Готівка',
+          type: 'Передплата',
+          transactionNo: '',
+          acceptedBy: orderAuthor.name,
+          status: 'Підтверджено',
+          confirmedBy: orderAuthor.name,
+          confirmedAt: today,
+          orderId,
+          comment: 'Передплата при прийомі замовлення',
+        }
+      : undefined;
     const clientExists = customerList.some((client) => client.phone.replace(/\D/g, '') === normalizedPhone.replace(/\D/g, ''));
     if (!clientExists) {
-      setCustomerList((current) => [{ name: fallbackClientName, phone: normalizedPhone, taxId: '', orders: 1 }, ...current]);
+      setCustomerList((current) => [{ name: fallbackClientName, phone: normalizedPhone, email: quickClientEmail.trim() || undefined, taxId: normalizeTaxId(quickClientTaxId), orders: 1 }, ...current]);
     } else {
-      setCustomerList((current) => current.map((client) => (client.phone.replace(/\D/g, '') === normalizedPhone.replace(/\D/g, '') ? { ...client, name: fallbackClientName, orders: client.orders + 1 } : client)));
+      setCustomerList((current) => current.map((client) => (client.phone.replace(/\D/g, '') === normalizedPhone.replace(/\D/g, '') ? {
+        ...client,
+        name: fallbackClientName,
+        email: quickClientEmail.trim() || client.email,
+        taxId: normalizeTaxId(quickClientTaxId) || client.taxId,
+        orders: client.orders + 1,
+      } : client)));
     }
 
     const order: ServiceOrder = {
@@ -7880,9 +7950,15 @@ useEffect(() => {
       qrUrl: `/orders/${orderId}`,
       client: fallbackClientName,
       phone: normalizedPhone,
-      device: quickDevice.trim(),
+      clientEmail: quickClientEmail.trim() || undefined,
+      clientTaxId: normalizeTaxId(quickClientTaxId) || undefined,
+      orderType: quickOrderType,
+      deviceType: quickDeviceType,
+      device: deviceLabel.trim(),
+      brandModel: brandModel || undefined,
       serial: quickSerial.trim() || 'Не вказано',
       issue: quickProblem.trim(),
+      complectation: quickComplectation.trim() || undefined,
       appearance: quickAppearance.trim() || undefined,
       intakeComment: quickComment.trim() || undefined,
       estimatedAmount: Number.isFinite(estimatedAmount) && estimatedAmount > 0 ? estimatedAmount : undefined,
@@ -7900,7 +7976,7 @@ useEffect(() => {
       deliveryAmount: 0,
       works: [],
       parts: [],
-      payments: [],
+      payments: prepayment ? [prepayment] : [],
       locationCode: suggestedRepairLocation,
       locationStatus: suggestedRepairLocation ? 'У комірці' : undefined,
       urgent: false,
@@ -7911,10 +7987,11 @@ useEffect(() => {
       pendingExtraApproval: false,
       currentVersion: 1,
       statusHistory: [
-        { id: uid('H'), newStatus: 'Прийнято', changedBy: orderAuthor.name, changedAt: today, comment: `Замовлення створено менеджером ${orderAuthor.name}${suggestedRepairLocation ? `, комірка ${suggestedRepairLocation}` : ''}.` },
+        { id: uid('H'), newStatus: 'Прийнято', changedBy: orderAuthor.name, changedAt: today, comment: `Замовлення створено менеджером ${orderAuthor.name}. Тип: ${quickOrderType}.${suggestedRepairLocation ? ` Комірка ${suggestedRepairLocation}.` : ''}` },
       ],
       activityLog: [
-        { id: uid('ACT'), date: today, action: 'Створено замовлення', detail: `${fallbackClientName} · ${quickDevice.trim()}` },
+        { id: uid('ACT'), date: today, action: 'Створено замовлення', detail: `${fallbackClientName} · ${quickOrderType} · ${deviceLabel.trim()}` },
+        ...(prepayment ? [{ id: uid('ACT'), date: today, action: 'Передплата', detail: money(prepayment.amount) }] : []),
       ],
     };
     setOrders((current) => [order, ...current]);
@@ -7924,7 +8001,7 @@ useEffect(() => {
         orderId,
         groupId: order.groupId,
         client: order.client,
-        type: quickDevice.toLowerCase().includes('картридж') ? 'Картридж' : quickDevice.toLowerCase().includes('принтер') ? 'Принтер' : quickDevice.toLowerCase().includes('мфу') ? 'МФУ' : 'Ноутбук',
+        type: quickDeviceType === 'картридж' ? 'Картридж' : quickDeviceType === 'принтер' ? 'Принтер' : deviceLabel.toLowerCase().includes('мфу') ? 'МФУ' : 'Ноутбук',
         code: `QR-UNIT-${nextNumber}-1`,
         status: 'Прийнято',
         engineer: engineer?.name ?? '',
@@ -7980,10 +8057,10 @@ useEffect(() => {
     });
     setSelectedOrderId(orderId);
     enqueueClientNotification(order, 'Прийом пристрою');
-    logAction('Швидкий прийом', orderId, `${order.client}: ${order.device}.${engineer ? ` Інженер: ${engineer.name}.` : ''}`);
+    logAction('Швидкий прийом', orderId, `${order.client}: ${order.orderType} · ${order.device}.${engineer ? ` Інженер: ${engineer.name}.` : ''}`);
     logAction('Створення замовлення', orderId, `${order.client} · ${order.device} · статус Прийнято.`);
     logAction('Автодокумент', orderId, 'Кнопка "Прийняти замовлення" автоматично створила наряд на ремонт.');
-    setNotice(`${orderId}: замовлення прийнято, клієнта ${clientExists ? 'знайдено' : 'створено'}${engineer ? ', інженера призначено' : ''}.${suggestedRepairLocation ? ` Комірку ${suggestedRepairLocation} закріплено.` : ''} Наряд і наклейка готові до друку.`);
+    setNotice(`Замовлення створено: ${orderId}. Клієнта ${clientExists ? 'знайдено' : 'створено'}${engineer ? ', інженера призначено' : ''}.${prepayment ? ` Передплата ${money(prepayment.amount)} зафіксована.` : ''}${suggestedRepairLocation ? ` Комірку ${suggestedRepairLocation} закріплено.` : ''}`);
     setSuggestedDocumentAction({
       orderId,
       kind: 'Наряд на ремонт',
@@ -7994,11 +8071,18 @@ useEffect(() => {
     setQuickPhone('');
     setQuickClientDebtWarning('');
     setQuickClientName('');
+    setQuickClientEmail('');
+    setQuickClientTaxId('');
+    setQuickOrderType('ремонт');
+    setQuickDeviceType('ноутбук');
     setQuickDevice('');
+    setQuickBrandModel('');
     setQuickSerial('');
     setQuickProblem('');
+    setQuickComplectation('');
     setQuickAppearance('');
     setQuickEstimatedAmount('');
+    setQuickPrepayment('');
     setQuickEngineerId('');
     setQuickContractId('');
     setQuickComment('');
@@ -12206,11 +12290,18 @@ useEffect(() => {
                 quickPhone={quickPhone}
                 quickClientDebtWarning={quickClientDebtWarning}
                 quickClientName={quickClientName}
+                quickClientEmail={quickClientEmail}
+                quickClientTaxId={quickClientTaxId}
+                quickOrderType={quickOrderType}
+                quickDeviceType={quickDeviceType}
                 quickDevice={quickDevice}
+                quickBrandModel={quickBrandModel}
                 quickSerial={quickSerial}
                 quickProblem={quickProblem}
+                quickComplectation={quickComplectation}
                 quickAppearance={quickAppearance}
                 quickEstimatedAmount={quickEstimatedAmount}
+                quickPrepayment={quickPrepayment}
                 quickEngineerId={quickEngineerId}
                 quickContractId={quickContractId}
                 quickLocationCode={quickLocationCode}
@@ -12221,11 +12312,18 @@ useEffect(() => {
                 bankImportItems={bankImportItems}
                 setQuickPhone={handleQuickPhoneChange}
                 setQuickClientName={setQuickClientName}
+                setQuickClientEmail={setQuickClientEmail}
+                setQuickClientTaxId={setQuickClientTaxId}
+                setQuickOrderType={setQuickOrderType}
+                setQuickDeviceType={setQuickDeviceType}
                 setQuickDevice={setQuickDevice}
+                setQuickBrandModel={setQuickBrandModel}
                 setQuickSerial={setQuickSerial}
                 setQuickProblem={setQuickProblem}
+                setQuickComplectation={setQuickComplectation}
                 setQuickAppearance={setQuickAppearance}
                 setQuickEstimatedAmount={setQuickEstimatedAmount}
+                setQuickPrepayment={setQuickPrepayment}
                 setQuickEngineerId={setQuickEngineerId}
                 setQuickContractId={setQuickContractId}
                 setQuickLocationCode={setQuickLocationCode}
@@ -12321,11 +12419,18 @@ useEffect(() => {
             quickPhone={quickPhone}
             quickClientDebtWarning={quickClientDebtWarning}
             quickClientName={quickClientName}
+            quickClientEmail={quickClientEmail}
+            quickClientTaxId={quickClientTaxId}
+            quickOrderType={quickOrderType}
+            quickDeviceType={quickDeviceType}
             quickDevice={quickDevice}
+            quickBrandModel={quickBrandModel}
             quickSerial={quickSerial}
             quickProblem={quickProblem}
+            quickComplectation={quickComplectation}
             quickAppearance={quickAppearance}
             quickEstimatedAmount={quickEstimatedAmount}
+            quickPrepayment={quickPrepayment}
             quickEngineerId={quickEngineerId}
             quickContractId={quickContractId}
             quickLocationCode={quickLocationCode}
@@ -12333,11 +12438,18 @@ useEffect(() => {
             customerList={customerList}
             setQuickPhone={handleQuickPhoneChange}
             setQuickClientName={setQuickClientName}
+            setQuickClientEmail={setQuickClientEmail}
+            setQuickClientTaxId={setQuickClientTaxId}
+            setQuickOrderType={setQuickOrderType}
+            setQuickDeviceType={setQuickDeviceType}
             setQuickDevice={setQuickDevice}
+            setQuickBrandModel={setQuickBrandModel}
             setQuickSerial={setQuickSerial}
             setQuickProblem={setQuickProblem}
+            setQuickComplectation={setQuickComplectation}
             setQuickAppearance={setQuickAppearance}
             setQuickEstimatedAmount={setQuickEstimatedAmount}
+            setQuickPrepayment={setQuickPrepayment}
             setQuickEngineerId={setQuickEngineerId}
             setQuickContractId={setQuickContractId}
             setQuickLocationCode={setQuickLocationCode}
@@ -12432,11 +12544,18 @@ useEffect(() => {
             quickPhone={quickPhone}
             quickClientDebtWarning={quickClientDebtWarning}
             quickClientName={quickClientName}
+            quickClientEmail={quickClientEmail}
+            quickClientTaxId={quickClientTaxId}
+            quickOrderType={quickOrderType}
+            quickDeviceType={quickDeviceType}
             quickDevice={quickDevice}
+            quickBrandModel={quickBrandModel}
             quickSerial={quickSerial}
             quickProblem={quickProblem}
+            quickComplectation={quickComplectation}
             quickAppearance={quickAppearance}
             quickEstimatedAmount={quickEstimatedAmount}
+            quickPrepayment={quickPrepayment}
             quickEngineerId={quickEngineerId}
             quickContractId={quickContractId}
             quickLocationCode={quickLocationCode}
@@ -12447,11 +12566,18 @@ useEffect(() => {
             bankImportItems={bankImportItems}
             setQuickPhone={handleQuickPhoneChange}
             setQuickClientName={setQuickClientName}
+            setQuickClientEmail={setQuickClientEmail}
+            setQuickClientTaxId={setQuickClientTaxId}
+            setQuickOrderType={setQuickOrderType}
+            setQuickDeviceType={setQuickDeviceType}
             setQuickDevice={setQuickDevice}
+            setQuickBrandModel={setQuickBrandModel}
             setQuickSerial={setQuickSerial}
             setQuickProblem={setQuickProblem}
+            setQuickComplectation={setQuickComplectation}
             setQuickAppearance={setQuickAppearance}
             setQuickEstimatedAmount={setQuickEstimatedAmount}
+            setQuickPrepayment={setQuickPrepayment}
             setQuickEngineerId={setQuickEngineerId}
             setQuickContractId={setQuickContractId}
             setQuickLocationCode={setQuickLocationCode}
@@ -12543,11 +12669,18 @@ useEffect(() => {
             quickPhone={quickPhone}
             quickClientDebtWarning={quickClientDebtWarning}
             quickClientName={quickClientName}
+            quickClientEmail={quickClientEmail}
+            quickClientTaxId={quickClientTaxId}
+            quickOrderType={quickOrderType}
+            quickDeviceType={quickDeviceType}
             quickDevice={quickDevice}
+            quickBrandModel={quickBrandModel}
             quickSerial={quickSerial}
             quickProblem={quickProblem}
+            quickComplectation={quickComplectation}
             quickAppearance={quickAppearance}
             quickEstimatedAmount={quickEstimatedAmount}
+            quickPrepayment={quickPrepayment}
             quickEngineerId={quickEngineerId}
             quickContractId={quickContractId}
             quickLocationCode={quickLocationCode}
@@ -12558,11 +12691,18 @@ useEffect(() => {
             bankImportItems={bankImportItems}
             setQuickPhone={handleQuickPhoneChange}
             setQuickClientName={setQuickClientName}
+            setQuickClientEmail={setQuickClientEmail}
+            setQuickClientTaxId={setQuickClientTaxId}
+            setQuickOrderType={setQuickOrderType}
+            setQuickDeviceType={setQuickDeviceType}
             setQuickDevice={setQuickDevice}
+            setQuickBrandModel={setQuickBrandModel}
             setQuickSerial={setQuickSerial}
             setQuickProblem={setQuickProblem}
+            setQuickComplectation={setQuickComplectation}
             setQuickAppearance={setQuickAppearance}
             setQuickEstimatedAmount={setQuickEstimatedAmount}
+            setQuickPrepayment={setQuickPrepayment}
             setQuickEngineerId={setQuickEngineerId}
             setQuickContractId={setQuickContractId}
             setQuickLocationCode={setQuickLocationCode}
@@ -13196,11 +13336,18 @@ function MessageFeed({
 function QuickOrderIntake({
   phone,
   clientName,
+  clientEmail,
+  clientTaxId,
+  orderType,
+  deviceType,
   device,
+  brandModel,
   serial,
   problem,
+  complectation,
   appearance,
   estimatedAmount,
+  prepayment,
   engineerId,
   contractId,
   locationCode,
@@ -13212,11 +13359,18 @@ function QuickOrderIntake({
   warehouseLocations,
   onPhoneChange,
   onClientNameChange,
+  onClientEmailChange,
+  onClientTaxIdChange,
+  onOrderTypeChange,
+  onDeviceTypeChange,
   onDeviceChange,
+  onBrandModelChange,
   onSerialChange,
   onProblemChange,
+  onComplectationChange,
   onAppearanceChange,
   onEstimatedAmountChange,
+  onPrepaymentChange,
   onEngineerChange,
   onContractChange,
   onLocationChange,
@@ -13225,11 +13379,18 @@ function QuickOrderIntake({
 }: {
   phone: string;
   clientName: string;
+  clientEmail: string;
+  clientTaxId: string;
+  orderType: IntakeOrderType;
+  deviceType: IntakeDeviceType;
   device: string;
+  brandModel: string;
   serial: string;
   problem: string;
+  complectation: string;
   appearance: string;
   estimatedAmount: string;
+  prepayment: string;
   engineerId: string;
   contractId: string;
   locationCode: string;
@@ -13241,11 +13402,18 @@ function QuickOrderIntake({
   warehouseLocations: WarehouseLocation[];
   onPhoneChange: (phone: string) => void;
   onClientNameChange: (name: string) => void;
+  onClientEmailChange: (email: string) => void;
+  onClientTaxIdChange: (taxId: string) => void;
+  onOrderTypeChange: (type: IntakeOrderType) => void;
+  onDeviceTypeChange: (type: IntakeDeviceType) => void;
   onDeviceChange: (device: string) => void;
+  onBrandModelChange: (model: string) => void;
   onSerialChange: (serial: string) => void;
   onProblemChange: (problem: string) => void;
+  onComplectationChange: (value: string) => void;
   onAppearanceChange: (appearance: string) => void;
   onEstimatedAmountChange: (amount: string) => void;
+  onPrepaymentChange: (amount: string) => void;
   onEngineerChange: (id: string) => void;
   onContractChange: (id: string) => void;
   onLocationChange: (code: string) => void;
@@ -13285,8 +13453,38 @@ function QuickOrderIntake({
           <input value={clientName} onChange={(event) => onClientNameChange(event.target.value)} placeholder="ПІБ або назва компанії" />
         </label>
         <label>
+          Email
+          <input value={clientEmail} onChange={(event) => onClientEmailChange(event.target.value)} placeholder="email клієнта" />
+        </label>
+        <label>
+          ЄДРПОУ / ІПН
+          <input value={clientTaxId} onChange={(event) => onClientTaxIdChange(event.target.value)} placeholder="для компанії або ФОП" />
+        </label>
+        <label>
+          Тип замовлення
+          <select value={orderType} onChange={(event) => onOrderTypeChange(event.target.value as IntakeOrderType)}>
+            <option value="ремонт">ремонт</option>
+            <option value="продаж">продаж</option>
+            <option value="заправка картриджа">заправка картриджа</option>
+            <option value="діагностика">діагностика</option>
+          </select>
+        </label>
+        <label>
+          Тип пристрою
+          <select value={deviceType} onChange={(event) => onDeviceTypeChange(event.target.value as IntakeDeviceType)}>
+            <option value="ноутбук">ноутбук</option>
+            <option value="принтер">принтер</option>
+            <option value="картридж">картридж</option>
+            <option value="інше">інше</option>
+          </select>
+        </label>
+        <label>
+          Бренд / модель
+          <input value={brandModel} onChange={(event) => onBrandModelChange(event.target.value)} placeholder="HP LaserJet / Lenovo ThinkPad" />
+        </label>
+        <label>
           Пристрій
-          <input value={device} onChange={(event) => onDeviceChange(event.target.value)} placeholder="Ноутбук Lenovo, МФУ Canon..." />
+          <input value={device} onChange={(event) => onDeviceChange(event.target.value)} placeholder="Коротка назва, якщо відрізняється від моделі" />
         </label>
         <label>
           Серійний номер
@@ -13297,12 +13495,20 @@ function QuickOrderIntake({
           <input value={problem} onChange={(event) => onProblemChange(event.target.value)} placeholder="Не вмикається, не друкує..." />
         </label>
         <label>
-          Зовнішній вигляд / комплектація
-          <input value={appearance} onChange={(event) => onAppearanceChange(event.target.value)} placeholder="Зарядка, сумка, подряпини, без АКБ..." />
+          Комплектація
+          <input value={complectation} onChange={(event) => onComplectationChange(event.target.value)} placeholder="Зарядка, кабель, сумка, картридж..." />
+        </label>
+        <label>
+          Зовнішній стан
+          <input value={appearance} onChange={(event) => onAppearanceChange(event.target.value)} placeholder="Подряпини, сколи, без АКБ..." />
         </label>
         <label>
           Орієнтовна сума
           <input value={estimatedAmount} onChange={(event) => onEstimatedAmountChange(event.target.value)} placeholder="0" type="number" min={0} />
+        </label>
+        <label>
+          Передоплата
+          <input value={prepayment} onChange={(event) => onPrepaymentChange(event.target.value)} placeholder="0" type="number" min={0} />
         </label>
         <label>
           Менеджер
@@ -13356,11 +13562,18 @@ function Dashboard({
   users,
   quickPhone,
   quickClientName,
+  quickClientEmail,
+  quickClientTaxId,
+  quickOrderType,
+  quickDeviceType,
   quickDevice,
+  quickBrandModel,
   quickSerial,
   quickProblem,
+  quickComplectation,
   quickAppearance,
   quickEstimatedAmount,
+  quickPrepayment,
   quickEngineerId,
   quickContractId,
   quickLocationCode,
@@ -13368,11 +13581,18 @@ function Dashboard({
   customerList,
   setQuickPhone,
   setQuickClientName,
+  setQuickClientEmail,
+  setQuickClientTaxId,
+  setQuickOrderType,
+  setQuickDeviceType,
   setQuickDevice,
+  setQuickBrandModel,
   setQuickSerial,
   setQuickProblem,
+  setQuickComplectation,
   setQuickAppearance,
   setQuickEstimatedAmount,
+  setQuickPrepayment,
   setQuickEngineerId,
   setQuickContractId,
   setQuickLocationCode,
@@ -13403,11 +13623,18 @@ function Dashboard({
   quickPhone: string;
   quickClientDebtWarning: string;
   quickClientName: string;
+  quickClientEmail: string;
+  quickClientTaxId: string;
+  quickOrderType: IntakeOrderType;
+  quickDeviceType: IntakeDeviceType;
   quickDevice: string;
+  quickBrandModel: string;
   quickSerial: string;
   quickProblem: string;
+  quickComplectation: string;
   quickAppearance: string;
   quickEstimatedAmount: string;
+  quickPrepayment: string;
   quickEngineerId: string;
   quickContractId: string;
   quickLocationCode: string;
@@ -13415,11 +13642,18 @@ function Dashboard({
   customerList: ClientRecord[];
   setQuickPhone: (phone: string) => void;
   setQuickClientName: (name: string) => void;
+  setQuickClientEmail: (email: string) => void;
+  setQuickClientTaxId: (taxId: string) => void;
+  setQuickOrderType: (type: IntakeOrderType) => void;
+  setQuickDeviceType: (type: IntakeDeviceType) => void;
   setQuickDevice: (device: string) => void;
+  setQuickBrandModel: (model: string) => void;
   setQuickSerial: (serial: string) => void;
   setQuickProblem: (problem: string) => void;
+  setQuickComplectation: (value: string) => void;
   setQuickAppearance: (appearance: string) => void;
   setQuickEstimatedAmount: (amount: string) => void;
+  setQuickPrepayment: (amount: string) => void;
   setQuickEngineerId: (id: string) => void;
   setQuickContractId: (id: string) => void;
   setQuickLocationCode: (code: string) => void;
@@ -13970,11 +14204,18 @@ function Dashboard({
         <QuickOrderIntake
           phone={quickPhone}
           clientName={quickClientName}
+          clientEmail={quickClientEmail}
+          clientTaxId={quickClientTaxId}
+          orderType={quickOrderType}
+          deviceType={quickDeviceType}
           device={quickDevice}
+          brandModel={quickBrandModel}
           serial={quickSerial}
           problem={quickProblem}
+          complectation={quickComplectation}
           appearance={quickAppearance}
           estimatedAmount={quickEstimatedAmount}
+          prepayment={quickPrepayment}
           engineerId={quickEngineerId}
           contractId={quickContractId}
           locationCode={quickLocationCode}
@@ -13986,11 +14227,18 @@ function Dashboard({
           warehouseLocations={warehouseLocations}
           onPhoneChange={setQuickPhone}
           onClientNameChange={setQuickClientName}
+          onClientEmailChange={setQuickClientEmail}
+          onClientTaxIdChange={setQuickClientTaxId}
+          onOrderTypeChange={setQuickOrderType}
+          onDeviceTypeChange={setQuickDeviceType}
           onDeviceChange={setQuickDevice}
+          onBrandModelChange={setQuickBrandModel}
           onSerialChange={setQuickSerial}
           onProblemChange={setQuickProblem}
+          onComplectationChange={setQuickComplectation}
           onAppearanceChange={setQuickAppearance}
           onEstimatedAmountChange={setQuickEstimatedAmount}
+          onPrepaymentChange={setQuickPrepayment}
           onEngineerChange={setQuickEngineerId}
           onContractChange={setQuickContractId}
           onLocationChange={setQuickLocationCode}
@@ -15066,11 +15314,18 @@ function OrdersPage(props: {
   quickPhone: string;
   quickClientDebtWarning: string;
   quickClientName: string;
+  quickClientEmail: string;
+  quickClientTaxId: string;
+  quickOrderType: IntakeOrderType;
+  quickDeviceType: IntakeDeviceType;
   quickDevice: string;
+  quickBrandModel: string;
   quickSerial: string;
   quickProblem: string;
+  quickComplectation: string;
   quickAppearance: string;
   quickEstimatedAmount: string;
+  quickPrepayment: string;
   quickEngineerId: string;
   quickContractId: string;
   quickLocationCode: string;
@@ -15080,11 +15335,18 @@ function OrdersPage(props: {
   contractActs: ContractActRecord[];
   setQuickPhone: (phone: string) => void;
   setQuickClientName: (name: string) => void;
+  setQuickClientEmail: (email: string) => void;
+  setQuickClientTaxId: (taxId: string) => void;
+  setQuickOrderType: (type: IntakeOrderType) => void;
+  setQuickDeviceType: (type: IntakeDeviceType) => void;
   setQuickDevice: (device: string) => void;
+  setQuickBrandModel: (model: string) => void;
   setQuickSerial: (serial: string) => void;
   setQuickProblem: (problem: string) => void;
+  setQuickComplectation: (value: string) => void;
   setQuickAppearance: (appearance: string) => void;
   setQuickEstimatedAmount: (amount: string) => void;
+  setQuickPrepayment: (amount: string) => void;
   setQuickEngineerId: (id: string) => void;
   setQuickContractId: (id: string) => void;
   setQuickLocationCode: (code: string) => void;
@@ -15182,7 +15444,7 @@ function OrdersPage(props: {
   const [managerPostPaymentOrderId, setManagerPostPaymentOrderId] = useState('');
   const [managerExceptionDraft, setManagerExceptionDraft] = useState<{ orderId: string; mode: 'cancel' | 'reopen' | 'refund' | 'part-return'; reason: string; comment: string; amount: string; partId?: string } | null>(null);
   const managerPaymentAmountInputRef = useRef<HTMLInputElement | null>(null);
-  const lastOpenQuickOrderRequestRef = useRef(props.openQuickOrderRequest ?? 0);
+  const lastOpenQuickOrderRequestRef = useRef(0);
   const lastSyncedSelectedOrderIdRef = useRef(props.selectedOrderId);
   const lastAssistantDashboardRequestRef = useRef(props.assistantDashboardRequest?.id ?? 0);
 
@@ -15192,6 +15454,7 @@ function OrdersPage(props: {
     lastOpenQuickOrderRequestRef.current = props.openQuickOrderRequest;
     setShowManagerCreateForm(true);
     setManagerSearch('');
+    setManagerFilter('none');
     setIsManagerOrderDetailOpen(false);
     setManagerPostPaymentOrderId('');
   }, [props.openQuickOrderRequest]);
@@ -15387,8 +15650,9 @@ function OrdersPage(props: {
     };
 
     const submitManagerOrder = () => {
-      if (!props.quickClientName.trim() || !props.quickPhone.trim() || !props.quickDevice.trim() || !props.quickProblem.trim()) {
-        props.notifyUser('Заповніть імʼя, телефон, пристрій і проблему.');
+      const hasDevice = props.quickDevice.trim() || props.quickBrandModel.trim();
+      if (!props.quickClientName.trim() || !props.quickPhone.trim() || !hasDevice || !props.quickProblem.trim()) {
+        props.notifyUser('Заповніть імʼя, телефон, пристрій / модель і проблему.');
         return;
       }
       props.createQuickOrder();
@@ -15400,11 +15664,18 @@ function OrdersPage(props: {
     const resetManagerCreateDraft = () => {
       props.setQuickClientName('');
       props.setQuickPhone('');
+      props.setQuickClientEmail('');
+      props.setQuickClientTaxId('');
+      props.setQuickOrderType('ремонт');
+      props.setQuickDeviceType('ноутбук');
       props.setQuickDevice('');
+      props.setQuickBrandModel('');
       props.setQuickSerial('');
       props.setQuickProblem('');
+      props.setQuickComplectation('');
       props.setQuickAppearance('');
       props.setQuickEstimatedAmount('');
+      props.setQuickPrepayment('');
       props.setQuickEngineerId('');
       props.setQuickContractId('');
       props.setQuickLocationCode('');
@@ -16193,6 +16464,8 @@ function OrdersPage(props: {
                         setShowManagerCreateForm(true);
                         props.setQuickClientName(managerSearchMatchedClient.name);
                         props.setQuickPhone(managerSearchMatchedClient.phone);
+                        props.setQuickClientEmail(managerSearchMatchedClient.email ?? '');
+                        props.setQuickClientTaxId(managerSearchMatchedClient.taxId ?? '');
                       }}
                     >
                       Створити замовлення
@@ -16317,6 +16590,14 @@ function OrdersPage(props: {
                 Телефон
                 <input value={props.quickPhone} onChange={(event) => props.setQuickPhone(event.target.value)} placeholder="+380..." />
               </label>
+              <label>
+                Email
+                <input value={props.quickClientEmail} onChange={(event) => props.setQuickClientEmail(event.target.value)} placeholder="email клієнта" />
+              </label>
+              <label>
+                ЄДРПОУ / ІПН
+                <input value={props.quickClientTaxId} onChange={(event) => props.setQuickClientTaxId(event.target.value)} placeholder="код клієнта" />
+              </label>
               {existingClientByPhone && (
                 <div className="manager-order-hints">
                   <span className="manager-order-hint manager-order-hint-warning">Клієнт з таким телефоном вже існує</span>
@@ -16326,6 +16607,8 @@ function OrdersPage(props: {
                     onClick={() => {
                       props.setQuickClientName(existingClientByPhone.name);
                       props.setQuickPhone(existingClientByPhone.phone);
+                      props.setQuickClientEmail(existingClientByPhone.email ?? '');
+                      props.setQuickClientTaxId(existingClientByPhone.taxId ?? '');
                     }}
                   >
                     Створити замовлення цьому клієнту
@@ -16333,12 +16616,61 @@ function OrdersPage(props: {
                 </div>
               )}
               <label>
+                Тип замовлення
+                <select value={props.quickOrderType} onChange={(event) => props.setQuickOrderType(event.target.value as IntakeOrderType)}>
+                  <option value="ремонт">ремонт</option>
+                  <option value="продаж">продаж</option>
+                  <option value="заправка картриджа">заправка картриджа</option>
+                  <option value="діагностика">діагностика</option>
+                </select>
+              </label>
+              <label>
                 Пристрій
-                <input value={props.quickDevice} onChange={(event) => props.setQuickDevice(event.target.value)} placeholder="HP LaserJet" />
+                <select value={props.quickDeviceType} onChange={(event) => props.setQuickDeviceType(event.target.value as IntakeDeviceType)}>
+                  <option value="ноутбук">ноутбук</option>
+                  <option value="принтер">принтер</option>
+                  <option value="картридж">картридж</option>
+                  <option value="інше">інше</option>
+                </select>
+              </label>
+              <label>
+                Бренд / модель
+                <input value={props.quickBrandModel} onChange={(event) => props.setQuickBrandModel(event.target.value)} placeholder="HP LaserJet / Lenovo ThinkPad" />
+              </label>
+              <label>
+                Назва пристрою
+                <input value={props.quickDevice} onChange={(event) => props.setQuickDevice(event.target.value)} placeholder="Картридж CE285A, ноутбук..." />
               </label>
               <label>
                 Проблема
                 <input value={props.quickProblem} onChange={(event) => props.setQuickProblem(event.target.value)} placeholder="Не друкує" />
+              </label>
+              <label>
+                Серійний номер
+                <input value={props.quickSerial} onChange={(event) => props.setQuickSerial(event.target.value)} placeholder="SN / IMEI" />
+              </label>
+              <label>
+                Комплектація
+                <input value={props.quickComplectation} onChange={(event) => props.setQuickComplectation(event.target.value)} placeholder="кабель, зарядка, сумка..." />
+              </label>
+              <label>
+                Зовнішній стан
+                <input value={props.quickAppearance} onChange={(event) => props.setQuickAppearance(event.target.value)} placeholder="подряпини, сколи, без АКБ" />
+              </label>
+              <label>
+                Попередня вартість
+                <input type="number" min={0} value={props.quickEstimatedAmount} onChange={(event) => props.setQuickEstimatedAmount(event.target.value)} placeholder="0" />
+              </label>
+              <label>
+                Передоплата
+                <input type="number" min={0} value={props.quickPrepayment} onChange={(event) => props.setQuickPrepayment(event.target.value)} placeholder="0" />
+              </label>
+              <label>
+                Інженер
+                <select value={props.quickEngineerId} onChange={(event) => props.setQuickEngineerId(event.target.value)}>
+                  <option value="">Оберіть інженера</option>
+                  {managerEngineers.map((engineer) => <option key={engineer.id} value={engineer.id}>{engineer.name}</option>)}
+                </select>
               </label>
               <label>
                 Договір
@@ -16346,6 +16678,10 @@ function OrdersPage(props: {
                   <option value="">Без договору</option>
                   {managerContracts.map((contract) => <option key={contract.id} value={contract.id}>{contract.id} · {contract.client}</option>)}
                 </select>
+              </label>
+              <label className="clients-modal-comment">
+                Коментар
+                <textarea value={props.quickComment} onChange={(event) => props.setQuickComment(event.target.value)} rows={3} placeholder="Коментар менеджера" />
               </label>
             </div>
             {props.quickClientDebtWarning && (
@@ -16355,7 +16691,7 @@ function OrdersPage(props: {
             )}
             <div className="action-row">
               <button type="button" className="submit-button" onClick={submitManagerOrder}>Зберегти замовлення</button>
-              <button type="button" onClick={cancelManagerCreateMode}>Скасувати / Назад до замовлень</button>
+              <button type="button" onClick={cancelManagerCreateMode}>Скасувати</button>
             </div>
           </section>
         ) : (
@@ -17099,11 +17435,18 @@ function OrdersPage(props: {
         <QuickOrderIntake
           phone={props.quickPhone}
           clientName={props.quickClientName}
+          clientEmail={props.quickClientEmail}
+          clientTaxId={props.quickClientTaxId}
+          orderType={props.quickOrderType}
+          deviceType={props.quickDeviceType}
           device={props.quickDevice}
+          brandModel={props.quickBrandModel}
           serial={props.quickSerial}
           problem={props.quickProblem}
+          complectation={props.quickComplectation}
           appearance={props.quickAppearance}
           estimatedAmount={props.quickEstimatedAmount}
+          prepayment={props.quickPrepayment}
           engineerId={props.quickEngineerId}
           contractId={props.quickContractId}
           locationCode={props.quickLocationCode}
@@ -17115,11 +17458,18 @@ function OrdersPage(props: {
           warehouseLocations={props.warehouseLocations}
           onPhoneChange={props.setQuickPhone}
           onClientNameChange={props.setQuickClientName}
+          onClientEmailChange={props.setQuickClientEmail}
+          onClientTaxIdChange={props.setQuickClientTaxId}
+          onOrderTypeChange={props.setQuickOrderType}
+          onDeviceTypeChange={props.setQuickDeviceType}
           onDeviceChange={props.setQuickDevice}
+          onBrandModelChange={props.setQuickBrandModel}
           onSerialChange={props.setQuickSerial}
           onProblemChange={props.setQuickProblem}
+          onComplectationChange={props.setQuickComplectation}
           onAppearanceChange={props.setQuickAppearance}
           onEstimatedAmountChange={props.setQuickEstimatedAmount}
+          onPrepaymentChange={props.setQuickPrepayment}
           onEngineerChange={props.setQuickEngineerId}
           onContractChange={props.setQuickContractId}
           onLocationChange={props.setQuickLocationCode}
@@ -21654,6 +22004,9 @@ function ClientsPage({
     address: string;
     comment: string;
   }>(null);
+  const [clientEditorError, setClientEditorError] = useState('');
+  const [clientEditorDuplicate, setClientEditorDuplicate] = useState<null | { client: ClientRecord; reason: string }>(null);
+  const [isClientSaving, setIsClientSaving] = useState(false);
   const [messageClient, setMessageClient] = useState<ClientRecord | null>(null);
   const lastOpenCreateRequestRef = useRef(openCreateRequest ?? 0);
   const clientTypeLabel = (type?: ClientRecord['legalType']) => {
@@ -21667,6 +22020,9 @@ function ClientsPage({
     onFocusedClientPhoneChange?.(phone);
   };
   const openClientEditor = (client?: ClientRecord) => {
+    setClientEditorError('');
+    setClientEditorDuplicate(null);
+    setIsClientSaving(false);
     setClientEditor(client ? {
       mode: 'edit',
       originalPhone: client.phone,
@@ -21691,6 +22047,84 @@ function ClientsPage({
       address: '',
       comment: '',
     });
+  };
+
+  const closeClientEditor = () => {
+    if (isClientSaving) return;
+    setClientEditor(null);
+    setClientEditorError('');
+    setClientEditorDuplicate(null);
+  };
+
+  const openDuplicateClient = () => {
+    if (!clientEditorDuplicate) return;
+    focusClient(clientEditorDuplicate.client.phone);
+    setClientSearch(clientEditorDuplicate.client.phone || clientEditorDuplicate.client.name);
+    closeClientEditor();
+  };
+
+  const submitClientEditor = () => {
+    if (!clientEditor || isClientSaving) return;
+    setClientEditorError('');
+    setClientEditorDuplicate(null);
+    const name = clientEditor.name.trim();
+    const phone = normalizeImportedPhone(clientEditor.phone);
+    const email = clientEditor.email.trim().toLowerCase();
+    const taxId = normalizeTaxId(clientEditor.taxId);
+    if (!name || !phone) {
+      setClientEditorError('Заповніть імʼя / компанію та телефон клієнта.');
+      return;
+    }
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setClientEditorError('Перевірте email: він має бути у форматі name@example.com.');
+      return;
+    }
+    const originalPhone = normalizeImportedPhone(clientEditor.originalPhone);
+    const duplicate = clients.find((client) => {
+      const sameOriginal = originalPhone && normalizeImportedPhone(client.phone) === originalPhone;
+      if (sameOriginal) return false;
+      const samePhone = normalizeImportedPhone(client.phone) === phone;
+      const sameEmail = email && (client.email ?? '').trim().toLowerCase() === email;
+      const sameTaxId = taxId && normalizeTaxId(client.taxId) === taxId;
+      return samePhone || sameEmail || sameTaxId;
+    });
+    if (duplicate) {
+      const reason = normalizeImportedPhone(duplicate.phone) === phone
+        ? 'телефоном'
+        : email && (duplicate.email ?? '').trim().toLowerCase() === email
+          ? 'email'
+          : 'ЄДРПОУ / ІПН';
+      setClientEditorDuplicate({ client: duplicate, reason });
+      setClientEditorError(`Клієнт уже існує за ${reason}. Дубль не створено.`);
+      return;
+    }
+
+    setIsClientSaving(true);
+    window.setTimeout(() => {
+      const saved = upsertClient({
+        originalPhone: clientEditor.originalPhone,
+        name: clientEditor.name,
+        phone: clientEditor.phone,
+        telegramId: clientEditor.telegramId,
+        notificationChannel: clientEditor.notificationChannel,
+        email: clientEditor.email,
+        taxId: clientEditor.taxId,
+        legalType: clientEditor.legalType,
+        address: clientEditor.address,
+        comment: clientEditor.comment,
+      });
+      if (saved) {
+        const savedPhone = normalizeImportedPhone(clientEditor.phone);
+        focusClient(savedPhone);
+        setClientSearch('');
+        setClientEditor(null);
+        setClientEditorError('');
+        setClientEditorDuplicate(null);
+      } else {
+        setClientEditorError('Клієнта не збережено. Перевірте дані або відкрийте існуючого клієнта.');
+      }
+      setIsClientSaving(false);
+    }, 260);
   };
 
   useEffect(() => {
@@ -21878,7 +22312,7 @@ function ClientsPage({
                       <span>{clientTypeLabel(client.legalType)}</span>
                     </div>
                     <div className="clients-card-actions">
-                      <button type="button" className="submit-button" onClick={() => openQuickOrderForClient(client)}>Нове замовлення</button>
+                      <button type="button" className="submit-button" onClick={() => { setIsClientDetailOpen(false); openQuickOrderForClient(client); }}>Прийняти замовлення</button>
                       <button type="button" onClick={() => openClientEditor(client)}>Редагувати клієнта</button>
                       <button type="button" onClick={() => { setMessageClient(client); messageClientRecord(client); }}>Повідомлення</button>
                       <button type="button" onClick={() => { if (clientHistoryRef.current) { clientHistoryRef.current.open = true; clientHistoryRef.current.scrollIntoView({ block: 'nearest' }); } }}>Історія замовлень</button>
@@ -22025,48 +22459,42 @@ function ClientsPage({
         );
       })()}
       {clientEditor && (
-        <div className="manager-order-modal-backdrop" onClick={() => setClientEditor(null)}>
+        <div className="manager-order-modal-backdrop" onClick={closeClientEditor}>
           <section className="panel manager-order-focus manager-order-modal clients-modal" onClick={(event) => event.stopPropagation()}>
             <div className="panel-heading">
               <h2>{clientEditor.mode === 'create' ? 'Новий клієнт' : 'Редагувати клієнта'}</h2>
-              <button type="button" onClick={() => setClientEditor(null)}>Закрити</button>
+              <button type="button" onClick={closeClientEditor} disabled={isClientSaving}>Закрити</button>
             </div>
             <div className="manager-order-payment-grid">
-              <label>Імʼя / компанія<input value={clientEditor.name} onChange={(event) => setClientEditor((current) => current ? { ...current, name: event.target.value } : current)} /></label>
-              <label>Телефон<input value={clientEditor.phone} onChange={(event) => setClientEditor((current) => current ? { ...current, phone: event.target.value } : current)} /></label>
-              <label>Telegram ID<input value={clientEditor.telegramId} onChange={(event) => setClientEditor((current) => current ? { ...current, telegramId: event.target.value } : current)} /></label>
-              <label>Канал сповіщень<select value={clientEditor.notificationChannel} onChange={(event) => setClientEditor((current) => current ? { ...current, notificationChannel: event.target.value as 'telegram' | 'sms' | 'both' | 'none' } : current)}><option value="sms">sms</option><option value="telegram">telegram</option><option value="both">both</option><option value="none">none</option></select></label>
-              <label>Email<input value={clientEditor.email} onChange={(event) => setClientEditor((current) => current ? { ...current, email: event.target.value } : current)} /></label>
-              <label>ЄДРПОУ / ІПН<input value={clientEditor.taxId} onChange={(event) => setClientEditor((current) => current ? { ...current, taxId: event.target.value } : current)} /></label>
-              <label>Тип клієнта<select value={clientEditor.legalType} onChange={(event) => setClientEditor((current) => current ? { ...current, legalType: event.target.value as 'company' | 'fop' | 'person' } : current)}><option value="person">Фізособа</option><option value="fop">ФОП</option><option value="company">Компанія</option></select></label>
-              <label>Адреса<input value={clientEditor.address} onChange={(event) => setClientEditor((current) => current ? { ...current, address: event.target.value } : current)} /></label>
-              <label className="clients-modal-comment">Коментар<textarea value={clientEditor.comment} onChange={(event) => setClientEditor((current) => current ? { ...current, comment: event.target.value } : current)} rows={4} /></label>
+              <label>Імʼя / компанія<input value={clientEditor.name} disabled={isClientSaving} onChange={(event) => setClientEditor((current) => current ? { ...current, name: event.target.value } : current)} /></label>
+              <label>Телефон<input value={clientEditor.phone} disabled={isClientSaving} onChange={(event) => setClientEditor((current) => current ? { ...current, phone: event.target.value } : current)} /></label>
+              <label>Telegram ID<input value={clientEditor.telegramId} disabled={isClientSaving} onChange={(event) => setClientEditor((current) => current ? { ...current, telegramId: event.target.value } : current)} /></label>
+              <label>Канал сповіщень<select value={clientEditor.notificationChannel} disabled={isClientSaving} onChange={(event) => setClientEditor((current) => current ? { ...current, notificationChannel: event.target.value as 'telegram' | 'sms' | 'both' | 'none' } : current)}><option value="sms">sms</option><option value="telegram">telegram</option><option value="both">both</option><option value="none">none</option></select></label>
+              <label>Email<input value={clientEditor.email} disabled={isClientSaving} onChange={(event) => setClientEditor((current) => current ? { ...current, email: event.target.value } : current)} /></label>
+              <label>ЄДРПОУ / ІПН<input value={clientEditor.taxId} disabled={isClientSaving} onChange={(event) => setClientEditor((current) => current ? { ...current, taxId: event.target.value } : current)} /></label>
+              <label>Тип клієнта<select value={clientEditor.legalType} disabled={isClientSaving} onChange={(event) => setClientEditor((current) => current ? { ...current, legalType: event.target.value as 'company' | 'fop' | 'person' } : current)}><option value="person">Фізособа</option><option value="fop">ФОП</option><option value="company">Компанія</option></select></label>
+              <label>Адреса<input value={clientEditor.address} disabled={isClientSaving} onChange={(event) => setClientEditor((current) => current ? { ...current, address: event.target.value } : current)} /></label>
+              <label className="clients-modal-comment">Коментар<textarea value={clientEditor.comment} disabled={isClientSaving} onChange={(event) => setClientEditor((current) => current ? { ...current, comment: event.target.value } : current)} rows={4} /></label>
             </div>
+            {clientEditorError && (
+              <div className="empty-state">
+                {clientEditorError}
+                {clientEditorDuplicate ? (
+                  <div className="action-row">
+                    <button type="button" onClick={openDuplicateClient}>Відкрити існуючого клієнта</button>
+                  </div>
+                ) : null}
+              </div>
+            )}
             <div className="manager-order-inline-actions">
-              <button type="button" onClick={() => setClientEditor(null)}>Скасувати</button>
+              <button type="button" onClick={closeClientEditor} disabled={isClientSaving}>Скасувати</button>
               <button
                 type="button"
                 className="submit-button"
-                onClick={() => {
-                  const saved = upsertClient({
-                    originalPhone: clientEditor.originalPhone,
-                    name: clientEditor.name,
-                    phone: clientEditor.phone,
-                    telegramId: clientEditor.telegramId,
-                    notificationChannel: clientEditor.notificationChannel,
-                    email: clientEditor.email,
-                    taxId: clientEditor.taxId,
-                    legalType: clientEditor.legalType,
-                    address: clientEditor.address,
-                    comment: clientEditor.comment,
-                  });
-                  if (saved) {
-                    focusClient(normalizeImportedPhone(clientEditor.phone));
-                    setClientEditor(null);
-                  }
-                }}
+                onClick={submitClientEditor}
+                disabled={isClientSaving}
               >
-                Зберегти клієнта
+                {isClientSaving ? 'Збереження...' : 'Зберегти клієнта'}
               </button>
             </div>
           </section>
