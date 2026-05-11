@@ -764,6 +764,20 @@ type PrintDocument = {
   signedBy?: string;
 };
 
+type ManualInvoiceLineInput = {
+  title: string;
+  qty: number;
+  price: number;
+};
+
+type CreateInvoiceDocumentInput = {
+  client: string;
+  orderId: string;
+  items: ManualInvoiceLineInput[];
+  paymentStatus: 'Очікує оплати' | 'Оплачено';
+  comment: string;
+};
+
 type CompanyRequisites = {
   name: string;
   edrpou: string;
@@ -6195,8 +6209,8 @@ useEffect(() => {
       return {
         ...common,
         searchPlaceholder: 'Пошук: документ / замовлення / клієнт / статус',
-        availableActions: ['Друк / PDF', 'Позначити відправленим', 'Позначити підписаним', 'Не підписано'],
-        availableFilters: ['Усі документи'],
+        availableActions: ['+ Створити документ', 'Рахунок', 'Зберегти', 'Друк', 'PDF / перегляд', 'Позначити відправленим', 'Позначити підписаним', 'Не підписано'],
+        availableFilters: ['Усі документи', 'Рахунок на оплату'],
       };
     }
     return common;
@@ -6334,6 +6348,8 @@ useEffect(() => {
     const profitWords = ['прибут', 'прибыл'];
     const paymentWords = ['оплат'];
     const issueWords = ['видат', 'выдат'];
+    const invoiceWords = ['рахунок', 'рахунку', 'счет', 'счёт', 'invoice'];
+    const documentWords = ['документ', 'pdf', 'друк', 'печать'];
     const helpWords = ['як', 'как', 'де', 'где', 'що', 'что', 'покажи', 'показать', 'відкрий', 'открой', 'open', 'знайди', 'найди'];
 
     if (exactOrder) {
@@ -6426,6 +6442,28 @@ useEffect(() => {
       return {
         title: 'AI: доступ обмежено',
         text: `Роль ${roleDisplay(viewUser.role)} не має доступу до складу. Якщо потрібно, я можу пояснити робочий маршрут у доступних вам розділах.`,
+        context: assistantContextSummary,
+      };
+    }
+
+    if (invoiceWords.some((word) => normalized.includes(word)) || documentWords.some((word) => normalized.includes(word))) {
+      if (canViewPage('documents')) {
+        return {
+          title: 'AI: документи і рахунок',
+          text: 'Рахунок уже доступний у розділі "Документи": натисніть "+ Створити документ", оберіть тип "Рахунок", замовлення, позиції та збережіть документ.',
+          context: assistantContextSummary,
+          steps: [
+            'Відкрийте "Документи".',
+            'Натисніть "+ Створити документ".',
+            'Оберіть "Рахунок", клієнта, замовлення, товари / послуги, оплату і коментар.',
+            'Натисніть "Зберегти", потім "Друк" або "PDF / перегляд".',
+          ],
+          actions: [{ label: 'Відкрити документи', tone: 'primary' as const, run: () => setPage('documents') }],
+        };
+      }
+      return {
+        title: 'AI: доступ до документів',
+        text: `Для ролі ${roleDisplay(viewUser.role)} розділ документів недоступний.`,
         context: assistantContextSummary,
       };
     }
@@ -6757,6 +6795,17 @@ useEffect(() => {
       if (!canOpen('purchases', 'У вас немає доступу до закупок.')) return;
       setPage('purchases');
       reply('AI Command Bar: закупки', 'Відкрив закупки. Перевірте потреби, постачальника і статус оплати перед діями.');
+      return;
+    }
+
+    if (hasAny(['рахунок', 'рахунку', 'счет', 'счёт', 'invoice', 'документ', 'pdf', 'друк', 'печать'])) {
+      if (!canOpen('documents', 'У вас немає доступу до документів.')) return;
+      setPage('documents');
+      reply(
+        'AI Command Bar: документи',
+        'Відкрив розділ "Документи". Для рахунку натисніть "+ Створити документ" і оберіть тип "Рахунок".',
+        ['Оберіть клієнта і замовлення.', 'Перевірте товари / послуги, суму, оплату і коментар.', 'Натисніть "Зберегти", потім "Друк" або "PDF / перегляд".'],
+      );
       return;
     }
 
@@ -8802,6 +8851,97 @@ useEffect(() => {
 
   function findServiceOrderDocument(orderId: string, kind: DocumentKind) {
     return documents.find((document) => document.entityType === 'service_order' && document.entityId === orderId && document.kind === kind);
+  }
+
+  function createInvoiceDocument(input: CreateInvoiceDocumentInput) {
+    const order = orders.find((item) => item.id === input.orderId);
+    if (!order) {
+      setNotice('Оберіть замовлення для рахунку.');
+      return undefined;
+    }
+    const clientName = input.client.trim() || order.client;
+    const invoiceItems = input.items
+      .map((item) => ({
+        title: item.title.trim(),
+        qty: Number(item.qty),
+        price: Number(item.price),
+      }))
+      .filter((item) => item.title && Number.isFinite(item.qty) && item.qty > 0 && Number.isFinite(item.price) && item.price >= 0);
+    if (invoiceItems.length === 0) {
+      setNotice('Додайте хоча б одну позицію товару або послуги.');
+      return undefined;
+    }
+    const existing = findServiceOrderDocument(order.id, 'Рахунок на оплату');
+    if (existing) {
+      setNotice(`Рахунок для ${order.id} вже існує: ${existing.number}.`);
+      return existing;
+    }
+
+    const gross = invoiceItems.reduce((sum, item) => sum + item.qty * item.price, 0);
+    const vatTotals = invoiceTotals(gross, companySettings.vatEnabled);
+    const number = nextDocumentNumber('Рахунок на оплату', documents);
+    const documentId = uid('DOC');
+    const snapshot = {
+      manualInvoice: true,
+      companyName: companySettings.companyName,
+      companyEdrpou: companySettings.edrpou,
+      companyIban: companySettings.iban,
+      companyBank: companySettings.bank,
+      companyMfo: companySettings.mfo,
+      companyAddress: companySettings.address,
+      companyPhone: companySettings.phone,
+      companyVatStatus: companySettings.vatEnabled ? 'Платник ПДВ' : 'Без ПДВ',
+      clientName,
+      clientPhone: order.phone,
+      clientTaxId: clientTaxId(clientName, order.phone),
+      orderId: order.id,
+      orderNumber: order.id,
+      device: order.device,
+      managerName: order.manager,
+      documentNumber: number,
+      documentDate: today,
+      invoiceReason: `Замовлення ${order.id} від ${extractDayKey(order.intakeDate) || order.intakeDate}`,
+      comment: input.comment.trim(),
+      paymentStatus: input.paymentStatus,
+      invoiceItems: invoiceItems.map((item, index) => ({
+        index: index + 1,
+        label: item.title,
+        qty: item.qty,
+        price: item.price,
+        total: item.qty * item.price,
+      })),
+      sumWithoutVAT: Math.round(vatTotals.totalWithoutVAT * 100) / 100,
+      vatAmount: Math.round(vatTotals.vat * 100) / 100,
+      sumWithVAT: Math.round(vatTotals.totalWithVAT * 100) / 100,
+      totalWithVATWords: numberToWordsUA(vatTotals.totalWithVAT),
+      createdAt: today,
+      createdBy: activeUser.name,
+    };
+    const document: PrintDocument = {
+      id: documentId,
+      kind: 'Рахунок на оплату',
+      number,
+      entityType: 'service_order',
+      entityId: order.id,
+      orderId: order.id,
+      clientOrSupplier: clientName,
+      createdAt: today,
+      createdBy: activeUser.name,
+      version: 1,
+      status: input.paymentStatus,
+      pdfPath: `/documents/service_order/${order.id}/${number}.pdf`,
+      amountNet: vatTotals.totalWithoutVAT,
+      amountVat: vatTotals.vat,
+      amountGross: vatTotals.totalWithVAT,
+      invoiceId: documentId,
+      snapshotData: JSON.stringify(snapshot),
+      orderVersionNo: order.currentVersion ?? 1,
+    };
+
+    setDocuments((current) => [document, ...current]);
+    logAction('Створення рахунку', order.id, `${number}: ${clientName}, ${money(vatTotals.totalWithVAT)}, статус "${input.paymentStatus}".`);
+    setNotice(`Рахунок ${number} створено і привʼязано до ${order.id}.`);
+    return document;
   }
 
   function createServiceOrderDocument(kind: ServiceOrderDocumentKind, order: ServiceOrder) {
@@ -12523,8 +12663,10 @@ useEffect(() => {
             documents={documents}
             templates={documentTemplates}
             orders={orders}
+            products={products}
             notifications={clientNotifications}
             taxInvoices={taxInvoices}
+            createInvoiceDocument={createInvoiceDocument}
             printDocument={printDocument}
             updateDocumentStatus={updateDocumentStatus}
             sendDocumentReminder={sendDocumentReminder}
@@ -20507,8 +20649,10 @@ function DocumentsPage({
   documents,
   templates,
   orders,
+  products,
   notifications,
   taxInvoices,
+  createInvoiceDocument,
   printDocument,
   updateDocumentStatus,
   sendDocumentReminder,
@@ -20516,8 +20660,10 @@ function DocumentsPage({
   documents: PrintDocument[];
   templates: Array<{ kind: DocumentKind; description: string; lockedRule: string }>;
   orders: ServiceOrder[];
+  products: Product[];
   notifications: ClientNotification[];
   taxInvoices: TaxInvoice[];
+  createInvoiceDocument: (input: CreateInvoiceDocumentInput) => PrintDocument | undefined;
   printDocument: (kind: DocumentKind, entityType: PrintDocument['entityType'], entityId: string, clientOrSupplier: string) => void;
   updateDocumentStatus: (documentId: string, status: PrintDocument['status']) => void;
   sendDocumentReminder: (orderId: string, reason: 'unsigned_act' | 'invoice_unpaid' | 'debt') => void;
@@ -20527,6 +20673,60 @@ function DocumentsPage({
   const sampleVat = documentVatTotals(sampleTotals.total);
   const sampleClient = clientDetails(sampleOrder.client, sampleOrder.phone);
   const sampleProductName = (productId: string) => initialProducts.find((product) => product.id === productId)?.name ?? productId;
+  const buildInvoiceLines = (order?: ServiceOrder) => (
+    order
+      ? serviceOrderInvoiceItems(order, products).map((item) => ({ title: item.label, qty: item.qty, price: item.price }))
+      : [{ title: '', qty: 1, price: 0 }]
+  );
+  const initialInvoiceOrder = orders[0];
+  const [isCreateDocumentOpen, setIsCreateDocumentOpen] = useState(false);
+  const [invoiceType, setInvoiceType] = useState<'Рахунок'>('Рахунок');
+  const [invoiceOrderId, setInvoiceOrderId] = useState(initialInvoiceOrder?.id ?? '');
+  const [invoiceClient, setInvoiceClient] = useState(initialInvoiceOrder?.client ?? '');
+  const [invoicePaymentStatus, setInvoicePaymentStatus] = useState<CreateInvoiceDocumentInput['paymentStatus']>('Очікує оплати');
+  const [invoiceComment, setInvoiceComment] = useState('');
+  const [invoiceLines, setInvoiceLines] = useState<ManualInvoiceLineInput[]>(() => buildInvoiceLines(initialInvoiceOrder));
+  const [previewDocumentId, setPreviewDocumentId] = useState('');
+  const selectedInvoiceOrder = orders.find((order) => order.id === invoiceOrderId);
+  const invoiceGross = invoiceLines.reduce((sum, item) => {
+    const qty = Number(item.qty);
+    const price = Number(item.price);
+    return sum + (Number.isFinite(qty) && Number.isFinite(price) ? qty * price : 0);
+  }, 0);
+  const invoiceVat = invoiceTotals(invoiceGross, companySettings.vatEnabled);
+  const previewDocument = documents.find((document) => document.id === previewDocumentId) ?? null;
+  const previewSnapshot = previewDocument
+    ? parseDocumentSnapshot(previewDocument.snapshotData) as (ReturnType<typeof parseDocumentSnapshot> & {
+      invoiceItems?: Array<{ label: string; qty: number; price: number; total: number }>;
+      comment?: string;
+    })
+    : null;
+
+  function applyOrderToInvoiceDraft(orderId: string) {
+    const order = orders.find((item) => item.id === orderId);
+    setInvoiceOrderId(orderId);
+    setInvoiceClient(order?.client ?? '');
+    setInvoiceLines(buildInvoiceLines(order));
+    setInvoicePaymentStatus(order && orderDebtAmount(order) <= 0 ? 'Оплачено' : 'Очікує оплати');
+  }
+
+  function updateInvoiceLine(index: number, patch: Partial<ManualInvoiceLineInput>) {
+    setInvoiceLines((current) => current.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)));
+  }
+
+  function submitInvoiceDocument() {
+    const created = createInvoiceDocument({
+      client: invoiceClient,
+      orderId: invoiceOrderId,
+      items: invoiceLines,
+      paymentStatus: invoicePaymentStatus,
+      comment: invoiceComment,
+    });
+    if (!created) return;
+    setPreviewDocumentId(created.id);
+    setIsCreateDocumentOpen(false);
+  }
+
   const documentStats = {
     drafts: documents.filter((document) => document.status === 'Чернетка').length,
     created: documents.filter((document) => document.status === 'Створено' || document.status === 'Роздруковано' || document.status === 'PDF збережено').length,
@@ -20583,6 +20783,133 @@ function DocumentsPage({
   return (
     <div className="page-grid">
       <PageTitle eyebrow="Документи" title="PDF, друк і юридичний архів" text="Квитанції, акти, чеки, накладні та повернення створюються з карток замовлень, продажів і закупівель. Кожен документ має версію, автора, PDF-шлях і звʼязок з документом-джерелом." />
+      <section className="panel">
+        <div className="panel-heading">
+          <h2>Створення документа</h2>
+          <span>ручний workflow</span>
+        </div>
+        <div className="action-row">
+          <button type="button" className="submit-button" onClick={() => setIsCreateDocumentOpen(true)}>+ Створити документ</button>
+          {previewDocument ? <button type="button" onClick={() => setPreviewDocumentId(previewDocument.id)}>PDF / перегляд</button> : null}
+          {previewDocument ? <button type="button" onClick={() => printDocument(previewDocument.kind, previewDocument.entityType, previewDocument.entityId, previewDocument.clientOrSupplier)}>Друк</button> : null}
+        </div>
+        {isCreateDocumentOpen && (
+          <div className="panel-subsection">
+            <div className="panel-heading">
+              <h2>Новий рахунок</h2>
+              <span>{selectedInvoiceOrder ? `${selectedInvoiceOrder.id} · ${selectedInvoiceOrder.client}` : 'оберіть замовлення'}</span>
+            </div>
+            <div className="table purchase-detail-form">
+              <label>
+                Тип документа
+                <select value={invoiceType} onChange={(event) => setInvoiceType(event.target.value as 'Рахунок')}>
+                  <option value="Рахунок">Рахунок</option>
+                </select>
+              </label>
+              <label>
+                Клієнт
+                <input value={invoiceClient} onChange={(event) => setInvoiceClient(event.target.value)} placeholder="Назва клієнта / компанії" />
+              </label>
+              <label>
+                Замовлення
+                <select value={invoiceOrderId} onChange={(event) => applyOrderToInvoiceDraft(event.target.value)}>
+                  <option value="">Оберіть замовлення</option>
+                  {orders.map((order) => <option key={order.id} value={order.id}>{order.id} — {order.client} — {order.device}</option>)}
+                </select>
+              </label>
+              <label>
+                Оплата
+                <select value={invoicePaymentStatus} onChange={(event) => setInvoicePaymentStatus(event.target.value as CreateInvoiceDocumentInput['paymentStatus'])}>
+                  <option value="Очікує оплати">Очікує оплати</option>
+                  <option value="Оплачено">Оплачено</option>
+                </select>
+              </label>
+              <label>
+                Сума
+                <input value={money(invoiceVat.totalWithVAT)} readOnly />
+              </label>
+              <label className="clients-modal-comment">
+                Коментар
+                <textarea rows={3} value={invoiceComment} onChange={(event) => setInvoiceComment(event.target.value)} placeholder="Умови оплати, примітка для клієнта або бухгалтерії" />
+              </label>
+            </div>
+            <div className="panel-subsection">
+              <div className="panel-heading"><h2>Товари / послуги</h2><span>{invoiceLines.length} позицій</span></div>
+              <div className="table documents-table">
+                <div className="table-row table-head"><span>Найменування</span><span>К-сть</span><span>Ціна</span><span>Сума</span></div>
+                {invoiceLines.map((line, index) => (
+                  <div className="table-row" key={`invoice-line-${index}`}>
+                    <span><input value={line.title} onChange={(event) => updateInvoiceLine(index, { title: event.target.value })} placeholder="Послуга або товар" /></span>
+                    <span><input type="number" min={0} step="0.01" value={line.qty} onChange={(event) => updateInvoiceLine(index, { qty: Number(event.target.value) })} /></span>
+                    <span><input type="number" min={0} step="0.01" value={line.price} onChange={(event) => updateInvoiceLine(index, { price: Number(event.target.value) })} /></span>
+                    <span>
+                      {money((Number(line.qty) || 0) * (Number(line.price) || 0))}
+                      <button type="button" onClick={() => setInvoiceLines((current) => current.filter((_, itemIndex) => itemIndex !== index))}>Видалити</button>
+                    </span>
+                  </div>
+                ))}
+              </div>
+              <div className="details-grid">
+                <Info label="Без ПДВ" value={money(invoiceVat.totalWithoutVAT)} />
+                <Info label="ПДВ" value={money(invoiceVat.vat)} />
+                <Info label="До сплати" value={money(invoiceVat.totalWithVAT)} />
+                <Info label="Привʼязка" value={selectedInvoiceOrder ? `${selectedInvoiceOrder.id} · ${selectedInvoiceOrder.phone}` : 'замовлення не вибрано'} />
+              </div>
+              <div className="action-row">
+                <button type="button" onClick={() => setInvoiceLines((current) => [...current, { title: '', qty: 1, price: 0 }])}>+ Позиція</button>
+                {selectedInvoiceOrder ? <button type="button" onClick={() => applyOrderToInvoiceDraft(selectedInvoiceOrder.id)}>Заповнити із замовлення</button> : null}
+              </div>
+            </div>
+            <div className="action-row">
+              <button type="button" onClick={() => setIsCreateDocumentOpen(false)}>Скасувати</button>
+              <button type="button" className="submit-button" onClick={submitInvoiceDocument}>Зберегти</button>
+              {previewDocument ? <button type="button" onClick={() => printDocument(previewDocument.kind, previewDocument.entityType, previewDocument.entityId, previewDocument.clientOrSupplier)}>Друк</button> : null}
+              {previewDocument ? <button type="button" onClick={() => setPreviewDocumentId(previewDocument.id)}>PDF / перегляд</button> : null}
+            </div>
+          </div>
+        )}
+      </section>
+      {previewDocument && (
+        <section className="panel document-preview">
+          <div className="panel-heading">
+            <h2>PDF / перегляд</h2>
+            <span>{previewDocument.number} · {previewDocument.status}</span>
+          </div>
+          <div className="official-document">
+            <h3>РАХУНОК НА ОПЛАТУ № {previewDocument.number}</h3>
+            <p>від {previewDocument.createdAt}</p>
+            <div className="details-grid">
+              <Info label="Постачальник" value={`${companyRequisites.name}, ЄДРПОУ ${companyRequisites.edrpou}, ${companyRequisites.iban}, ${companyRequisites.bank}`} />
+              <Info label="Клієнт" value={previewDocument.clientOrSupplier} />
+              <Info label="Замовлення" value={previewDocument.orderId ?? previewDocument.entityId} />
+              <Info label="Оплата" value={previewSnapshot?.paymentStatus || previewDocument.status} />
+            </div>
+            <div className="table documents-table">
+              <div className="table-row table-head"><span>Найменування</span><span>К-сть</span><span>Ціна</span><span>Сума</span></div>
+              {(previewSnapshot?.invoiceItems ?? []).map((item, index) => (
+                <div className="table-row" key={`preview-${previewDocument.id}-${index}`}>
+                  <span>{item.label}</span>
+                  <span>{item.qty}</span>
+                  <span>{money(item.price)}</span>
+                  <span>{money(item.total)}</span>
+                </div>
+              ))}
+              {!previewSnapshot?.invoiceItems?.length && <div className="empty-state">Позиції рахунку збережені у snapshot або будуть сформовані з документа-джерела.</div>}
+            </div>
+            <div className="details-grid">
+              <Info label="Без ПДВ" value={money(previewDocument.amountNet ?? 0)} />
+              <Info label="ПДВ" value={money(previewDocument.amountVat ?? 0)} />
+              <Info label="До сплати" value={money(previewDocument.amountGross ?? 0)} />
+              <Info label="Сума прописом" value={previewSnapshot?.totalWithVATWords ?? amountInWordsUA(previewDocument.amountGross ?? 0)} />
+            </div>
+            {previewSnapshot?.comment ? <p>{previewSnapshot.comment}</p> : null}
+            <div className="action-row">
+              <button type="button" onClick={() => printDocument(previewDocument.kind, previewDocument.entityType, previewDocument.entityId, previewDocument.clientOrSupplier)}>Друк</button>
+              <button type="button" onClick={() => setPreviewDocumentId('')}>Закрити перегляд</button>
+            </div>
+          </div>
+        </section>
+      )}
       <section className="stats-grid">
         <Metric icon={<ClipboardList />} label="Документів" value={String(documents.length)} hint="збережені PDF" />
         <Metric icon={<ShieldCheck />} label="Шаблонів" value={String(templates.length)} hint="для ремонту, продажу, складу" />
@@ -20713,6 +21040,7 @@ function DocumentsPage({
               <span>
                 {document.pdfPath}
                 <small>{document.amountGross ? `без ПДВ ${money(document.amountNet ?? 0)} · ПДВ ${money(document.amountVat ?? 0)} · з ПДВ ${money(document.amountGross)}` : 'суми не задані'}</small>
+                <button type="button" onClick={() => setPreviewDocumentId(document.id)}>PDF / перегляд</button>
                 <button type="button" onClick={() => printDocument(document.kind, document.entityType, document.entityId, document.clientOrSupplier)}>Друк / PDF</button>
                 <button type="button">Передати в BAS</button>
                 {document.status !== 'Відправлено' && document.status !== 'Підписано' ? <button type="button" onClick={() => updateDocumentStatus(document.id, 'Відправлено')}>Позначити відправленим</button> : null}
