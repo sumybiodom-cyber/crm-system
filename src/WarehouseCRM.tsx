@@ -4628,6 +4628,33 @@ function normalizeUsers(records: User[]) {
   return records.map(normalizeUserRecord);
 }
 
+function createTestAuthUser(id: string, name: string, role: Role, phone: string): User {
+  return normalizeUserRecord({
+    id,
+    name,
+    role,
+    twoFactor: false,
+    login: id,
+    phone,
+    email: `${id}@test.local`,
+    authMode: 'phone_code',
+    pinCode: '',
+    permissions: defaultPermissionsForRole(role),
+    session: 'Активна',
+  });
+}
+
+const TEST_AUTH_USERS: User[] = [
+  createTestAuthUser('test-admin', 'TEST Адміністратор', 'Адміністратор', '+380 00 000 00 01'),
+  createTestAuthUser('test-manager', 'TEST Менеджер', 'Менеджер', '+380 00 000 00 02'),
+  createTestAuthUser('test-engineer', 'TEST Інженер', 'Інженер', '+380 00 000 00 03'),
+  createTestAuthUser('test-accountant', 'TEST Бухгалтер', 'Бухгалтер', '+380 00 000 00 04'),
+];
+
+function mergeTestAuthUsers(users: User[]) {
+  return mergeSeededById(users, TEST_AUTH_USERS).map(normalizeUserRecord);
+}
+
 function hasAccess(role: Role, page: Page) {
   return rolePageAccess[normalizeRoleAlias(role)].includes(page);
 }
@@ -5020,6 +5047,8 @@ function EmployeeLoginScreen({
   onRequestCode,
   onVerifyCode,
   onBack,
+  testUsers,
+  onTestLogin,
 }: {
   phone: string;
   code: string;
@@ -5031,6 +5060,8 @@ function EmployeeLoginScreen({
   onRequestCode: () => void;
   onVerifyCode: () => void;
   onBack: () => void;
+  testUsers: User[];
+  onTestLogin: (user: User) => void;
 }) {
   return (
     <div
@@ -5062,12 +5093,30 @@ function EmployeeLoginScreen({
             </div>
           </div>
           <div>
-            <h1 style={{ margin: 0, fontSize: '34px', lineHeight: 1.05 }}>Телефон + одноразовий код</h1>
+            <h1 style={{ margin: 0, fontSize: '34px', lineHeight: 1.05 }}>TEST AUTH</h1>
             <p style={{ margin: '10px 0 0', color: '#64748b', fontSize: '15px', lineHeight: 1.5 }}>
-              Без паролів, без реєстрації, без зайвих кроків. Увійти може тільки співробітник, чий телефон є в базі.
+              Тимчасовий внутрішній режим: швидкий вхід під тестовою роллю без SMS. Нижче залишено класичний вхід по телефону для майбутньої авторизації.
             </p>
           </div>
         </div>
+        <div className="test-auth-panel" aria-label="Тестові співробітники">
+          <div className="test-auth-head">
+            <strong>Швидкий вхід</strong>
+            <span>TEST MODE · localStorage session</span>
+          </div>
+          <div className="test-auth-users">
+            {testUsers.map((user) => (
+              <button type="button" key={user.id} className="test-auth-user" onClick={() => onTestLogin(user)}>
+                <span>
+                  <strong>{user.name}</strong>
+                  <small>{roleDisplay(user.role)}</small>
+                </span>
+                <em>Увійти</em>
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="test-auth-divider"><span>або телефонний вхід</span></div>
         {!challenge ? (
           <>
             <label>
@@ -5125,7 +5174,7 @@ useEffect(() => {
   const [openClientEditorRequest, setOpenClientEditorRequest] = useState(0);
   const [globalAiCommand, setGlobalAiCommand] = useState('');
   const [showGlobalSearchResults, setShowGlobalSearchResults] = useState(false);
-  const [users, setUsers] = useState<User[]>(() => loadEmployeesFromStorage());
+  const [users, setUsers] = useState<User[]>(() => mergeTestAuthUsers(loadEmployeesFromStorage()));
   const [products, setProducts] = useState<Product[]>(() => loadProductsFromStorage());
   const [orders, setOrders] = useState<ServiceOrder[]>(() => loadOrdersFromStorage());
   const [orderVersions, setOrderVersions] = useState<OrderVersion[]>(() => loadOrdersFromStorage().map((order) => ({
@@ -5754,6 +5803,30 @@ useEffect(() => {
     return incoming - closedActsAmount;
   }
 
+  function loginAsTestUser(testUser: User) {
+    const normalizedTestUser = normalizeUserRecord(testUser);
+    setUsers((current) => mergeTestAuthUsers(current));
+    setSessionUserId(normalizedTestUser.id);
+    setActiveUserId(normalizedTestUser.id);
+    setPage(defaultPageForUser(normalizedTestUser));
+    setShowMenu(false);
+    setLoginChallenge(null);
+    setLoginCode('');
+    setLoginPhone('');
+    setLoginError('');
+    setLoginHint(`TEST MODE: вхід як ${normalizedTestUser.name} · ${roleDisplay(normalizedTestUser.role)}`);
+    localStorage.setItem('crm_test_auth_mode', 'true');
+    prependActionLog({
+      id: uid('LOG'),
+      date: today,
+      user: normalizedTestUser.name,
+      role: normalizedTestUser.role,
+      action: 'TEST AUTH вхід',
+      entity: 'Сесія',
+      comment: 'Тимчасовий швидкий вхід без SMS для внутрішнього тестування.',
+    });
+  }
+
   function requestPhoneCode() {
     const normalized = normalizePhone(loginPhone);
     const employees = loadEmployeesFromStorage();
@@ -5853,6 +5926,7 @@ useEffect(() => {
     setLoginPhone('');
     setLoginError('');
     setLoginHint('');
+    localStorage.removeItem('crm_test_auth_mode');
   }
 
   function unlockSession() {
@@ -11724,6 +11798,8 @@ useEffect(() => {
         onRequestCode={requestPhoneCode}
         onVerifyCode={verifyPhoneCode}
         onBack={resetPhoneLogin}
+        testUsers={TEST_AUTH_USERS}
+        onTestLogin={loginAsTestUser}
       />
     );
   }

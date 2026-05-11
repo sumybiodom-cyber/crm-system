@@ -7279,3 +7279,233 @@ body {
   }
 }
 
+.test-auth-panel {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 18px;
+  padding: 12px;
+  border: 1px solid #d8e0ea;
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.test-auth-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.test-auth-head strong {
+  color: #111827;
+  font-size: 14px;
+  font-weight: 780;
+}
+
+.test-auth-head span {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.test-auth-users {
+  display: grid;
+  gap: 8px;
+}
+
+.test-auth-user {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 50px;
+  padding: 8px 10px;
+  border: 1px solid #e6ebf2;
+  border-radius: 9px;
+  background: #fbfdff;
+  color: #111827;
+  text-align: left;
+}
+
+.test-auth-user:hover {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+}
+
+.test-auth-user span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.test-auth-user strong {
+  font-size: 14px;
+  font-weight: 760;
+}
+
+.test-auth-user small {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.test-auth-user em {
+  flex: 0 0 auto;
+  min-height: 28px;
+  padding: 6px 10px;
+  border-radius: 7px;
+  background: #1f2937;
+  color: #ffffff;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 760;
+}
+
+.test-auth-divider {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  margin: 2px 0 16px;
+  color: #94a3b8;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.test-auth-divider::before,
+.test-auth-divider::after {
+  content: "";
+  height: 1px;
+  background: #e6ebf2;
+}
+
+/* AI Assistant fixed composer layout */
+.workspace-main-with-assistant {
+  padding-right: var(--assistant-offset, 0px);
+}
+
+.workspace-assistant {
+  top: 76px;
+  right: 16px;
+  bottom: 12px;
+  height: calc(100vh - 88px);
+  max-height: calc(100vh - 88px);
+  overflow: hidden;
+}
+
+.workspace-assistant-fullscreen {
+  top: 12px;
+  right: 12px;
+  bottom: 12px;
+  height: calc(100vh - 24px);
+  max-height: calc(100vh - 24px);
+}
+
+.workspace-assistant-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-height: 0;
+  height: 100%;
+  max-height: 100%;
+  overflow: hidden;
+}
+
+.workspace-assistant-head {
+  min-height: 0;
+}
+
+.workspace-assistant-context {
+  display: none;
+}
+
+.workspace-assistant-log {
+  min-height: 0;
+  height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+  padding-bottom: 8px;
+}
+
+.workspace-assistant-composer {
+  position: relative;
+  z-index: 2;
+  flex: 0 0 auto;
+  min-height: 0;
+  padding-top: 10px;
+  border-top: 1px solid #e6ebf2;
+  background: rgba(248, 250, 252, 0.96);
+}
+
+.workspace-assistant-composer textarea {
+  min-height: 64px;
+  max-height: 96px;
+  resize: none;
+}
+
+.workspace-assistant-compose-actions {
+  flex: 0 0 auto;
+  min-height: 34px;
+}
+
+.workspace-assistant-collapsed {
+  height: calc(100vh - 88px);
+}
+
+.workspace-assistant-collapsed .workspace-assistant-panel {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+@media (max-width: 1240px) {
+  .workspace-main-with-assistant {
+    padding-right: 0;
+  }
+
+  .workspace-assistant {
+    position: static;
+    height: min(720px, calc(100vh - 24px));
+    max-height: min(720px, calc(100vh - 24px));
+    overflow: hidden;
+  }
+
+  .workspace-assistant-panel {
+    height: 100%;
+  }
+}
+
+@media (max-height: 760px) {
+  .workspace-assistant {
+    top: 64px;
+    bottom: 8px;
+    height: calc(100vh - 72px);
+    max-height: calc(100vh - 72px);
+  }
+
+  .workspace-assistant-panel {
+    gap: 8px;
+    padding: 8px;
+  }
+
+  .workspace-assistant-head-actions {
+    gap: 4px;
+  }
+
+  .workspace-assistant-head-button {
+    min-height: 28px;
+    padding: 0 8px;
+    font-size: 11px;
+  }
+
+  .workspace-assistant-composer textarea {
+    min-height: 56px;
+    max-height: 72px;
+  }
+
+  .workspace-assistant-compose-actions {
+    min-height: 32px;
+  }
+}
+
