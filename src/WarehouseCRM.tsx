@@ -8,6 +8,7 @@ import actTemplateHtml from './templates/actTemplate.html?raw';
 import waybillTemplateHtml from './templates/waybillTemplate.html?raw';
 import { 
   Archive,
+  ArrowRight,
   Banknote,
   Bell,
   CheckCircle2,
@@ -23,6 +24,7 @@ import {
   Search,
   Settings,
   ShieldCheck,
+  Sparkles,
   ShoppingCart,
   Truck,
   TrendingUp,
@@ -5120,6 +5122,8 @@ useEffect(() => {
   const [globalClientSearch, setGlobalClientSearch] = useState('');
   const [globalFocusedClientPhone, setGlobalFocusedClientPhone] = useState('');
   const [openQuickOrderRequest, setOpenQuickOrderRequest] = useState(0);
+  const [openClientEditorRequest, setOpenClientEditorRequest] = useState(0);
+  const [globalAiCommand, setGlobalAiCommand] = useState('');
   const [showGlobalSearchResults, setShowGlobalSearchResults] = useState(false);
   const [users, setUsers] = useState<User[]>(() => loadEmployeesFromStorage());
   const [products, setProducts] = useState<Product[]>(() => loadProductsFromStorage());
@@ -6015,6 +6019,13 @@ useEffect(() => {
     }
     setShowMenu(false);
   };
+  const openAssistantCreateClient = () => {
+    setOpenClientEditorRequest((current) => current + 1);
+    setGlobalClientSearch('');
+    setGlobalFocusedClientPhone('');
+    setPage('clients');
+    setShowMenu(false);
+  };
   const assistantPermissionContext = useMemo(() => ({
     finance: canViewPage('finance'),
     payments: canDo('finance.payments'),
@@ -6532,6 +6543,178 @@ useEffect(() => {
     } finally {
       setIsAssistantLoading(false);
     }
+  }
+
+  function submitGlobalAiCommand() {
+    const input = globalAiCommand.trim();
+    if (!input) return;
+    const normalized = normalizeLooseText(input);
+    const hasAny = (words: string[]) => words.some((word) => normalized.includes(normalizeLooseText(word)));
+    const canOpen = (targetPage: Page, deniedText: string) => {
+      if (canViewPage(targetPage)) return true;
+      pushAssistantMessages([{
+        id: uid('AI'),
+        author: 'assistant',
+        title: 'AI Command Bar: доступ обмежено',
+        text: deniedText,
+        context: assistantContextSummary,
+        createdAt: assistantTimestamp(),
+      }]);
+      setNotice(deniedText);
+      return false;
+    };
+    const reply = (title: string, text: string, steps?: string[]) => {
+      pushAssistantMessages([
+        {
+          id: uid('AI'),
+          author: 'user',
+          text: input,
+          context: assistantContextSummary,
+          createdAt: assistantTimestamp(),
+        },
+        {
+          id: uid('AI'),
+          author: 'assistant',
+          title,
+          text,
+          steps,
+          context: assistantContextSummary,
+          createdAt: assistantTimestamp(),
+        },
+      ]);
+      setNotice(text);
+    };
+
+    setIsAssistantVisible(true);
+    setIsAssistantCollapsed(false);
+    setGlobalAiCommand('');
+
+    const exactOrder = findExactOrderMatch(orders, input);
+    if (exactOrder) {
+      openAssistantOrder(exactOrder.id);
+      reply('AI Command Bar: замовлення знайдено', `Відкрив ${exactOrder.id}. Перевірте картку та оберіть наступну дію.`);
+      return;
+    }
+
+    const exactClient = findExactClientMatch(customerList, input);
+    if (exactClient) {
+      if (!canOpen('clients', 'У вас немає доступу до розділу клієнтів.')) return;
+      openAssistantClient(exactClient.phone, exactClient.phone);
+      reply('AI Command Bar: клієнта знайдено', `Відкрив картку клієнта ${exactClient.name}.`);
+      return;
+    }
+
+    if (hasAny(['видали', 'удали', 'delete', 'спиши', 'списати', 'проведи оплату', 'провести оплату', 'зміни права', 'изменить права', 'зарплату виплати', 'виплати зарплату'])) {
+      reply(
+        'AI Command Bar: потрібне підтвердження',
+        'Ця дія може змінити гроші, склад, права або дані. На першому етапі я не виконую її автоматично.',
+        ['Відкрийте відповідний розділ.', 'Перевірте дані вручну.', 'Підтвердіть дію кнопкою у класичному інтерфейсі.'],
+      );
+      return;
+    }
+
+    if (hasAny(['зарплат', 'нарахуван'])) {
+      if (!canOpen('payroll', 'У вас немає доступу до цього розділу.')) return;
+      setPage('payroll');
+      reply('AI Command Bar: зарплата', 'Відкрив розділ зарплати. Перевірте період і співробітника перед будь-якою виплатою.');
+      return;
+    }
+
+    if (hasAny(['фінанс', 'финанс', 'каса', 'прибут', 'прибыл'])) {
+      if (!canOpen('finance', 'У вас немає доступу до фінансів.')) return;
+      setPage('finance');
+      reply('AI Command Bar: фінанси', 'Відкрив фінансовий центр. Тут можна дивитися борги, оплату, витрати та контроль грошей.');
+      return;
+    }
+
+    if (hasAny(['створи клієнта', 'створити клієнта', 'нового клієнта', 'новий клієнт', 'создай клиента', 'клиента создать'])) {
+      if (!canOpen('clients', 'У вас немає доступу до створення клієнта.')) return;
+      openAssistantCreateClient();
+      reply('AI Command Bar: новий клієнт', 'Відкрив розділ "Клієнти" і форму "Новий клієнт".', ['Заповніть телефон, імʼя та компанію.', 'Після перевірки натисніть "Зберегти".']);
+      return;
+    }
+
+    if (hasAny(['оформи замовлення', 'створи замовлення', 'нове замовлення', 'новый заказ', 'прийняти замовлення', 'принять заказ'])) {
+      if (!canOpen(viewUser.role === 'Менеджер' ? 'dashboard' : canViewPage('orders') ? 'orders' : 'my-orders', 'У вас немає доступу до створення замовлення.')) return;
+      openAssistantCreateOrder();
+      reply('AI Command Bar: нове замовлення', 'Відкрив форму "Нове замовлення".', ['Оберіть клієнта, пристрій, несправність та інженера.', 'CRM створить замовлення тільки після вашого збереження.']);
+      return;
+    }
+
+    if (hasAny(['борг', 'долг', 'неоплачен', 'не оплат'])) {
+      if (viewUser.role === 'Менеджер') {
+        requestAssistantDashboardFilter('Борг');
+        reply('AI Command Bar: борги', 'Показав замовлення з боргом у робочому списку менеджера.');
+        return;
+      }
+      if (!canOpen('finance', 'У вас немає доступу до фінансів.')) return;
+      setPage('finance');
+      reply('AI Command Bar: борги', 'Відкрив фінансовий центр для контролю боргів.');
+      return;
+    }
+
+    if (hasAny(['готові до видачі', 'готово до видачі', 'готовые к выдаче', 'готові', 'готово'])) {
+      if (viewUser.role === 'Менеджер') {
+        requestAssistantDashboardFilter('Готово');
+        reply('AI Command Bar: готові до видачі', 'Показав замовлення зі статусом готовності до видачі.');
+        return;
+      }
+      if (!canOpen('orders', 'У вас немає доступу до загального списку замовлень.')) return;
+      setPage('orders');
+      reply('AI Command Bar: готові до видачі', 'Відкрив замовлення. Перевірте фільтр або статус "Готовий до видачі".');
+      return;
+    }
+
+    if (hasAny(['мої ремонти', 'мои ремонты', 'мої замовлення', 'мои заказы'])) {
+      if (!canOpen('my-orders', 'У вас немає доступу до розділу "Мої замовлення".')) return;
+      setPage('my-orders');
+      reply('AI Command Bar: мої ремонти', 'Відкрив ваш робочий список ремонтів.');
+      return;
+    }
+
+    if (hasAny(['склад', 'запчаст', 'товар', 'залишк'])) {
+      if (!canOpen('parts', 'У вас немає доступу до складу.')) return;
+      setPage('parts');
+      reply('AI Command Bar: склад', 'Відкрив склад. Тут можна дивитися залишки, партії, резерви та рух товару.');
+      return;
+    }
+
+    if (hasAny(['закуп', 'постачаль', 'поставщик'])) {
+      if (!canOpen('purchases', 'У вас немає доступу до закупок.')) return;
+      setPage('purchases');
+      reply('AI Command Bar: закупки', 'Відкрив закупки. Перевірте потреби, постачальника і статус оплати перед діями.');
+      return;
+    }
+
+    if (hasAny(['клієнт', 'клиент', 'телефон'])) {
+      if (!canOpen('clients', 'У вас немає доступу до розділу клієнтів.')) return;
+      setGlobalClientSearch(input);
+      setGlobalFocusedClientPhone('');
+      setPage('clients');
+      reply('AI Command Bar: пошук клієнта', 'Відкрив клієнтів і передав запит у пошук.', ['Шукайте за телефоном, імʼям, компанією або ЄДРПОУ.', 'Якщо клієнта немає, створіть його через форму "Новий клієнт".']);
+      return;
+    }
+
+    const fallback = buildAssistantReply(input);
+    if (fallback.actions?.[0]) fallback.actions[0].run();
+    pushAssistantMessages([
+      {
+        id: uid('AI'),
+        author: 'user',
+        text: input,
+        context: assistantContextSummary,
+        createdAt: assistantTimestamp(),
+      },
+      {
+        id: uid('AI'),
+        author: 'assistant',
+        title: fallback.title,
+        text: fallback.text,
+        steps: fallback.steps,
+        context: fallback.context ?? assistantContextSummary,
+        createdAt: assistantTimestamp(),
+      },
+    ]);
   }
 
   function openOrderFromNotification(message: InternalMessage) {
@@ -11708,6 +11891,33 @@ useEffect(() => {
           className={`workspace-main${isAssistantVisible ? ' workspace-main-with-assistant' : ''}${isAssistantVisible && assistantMode === 'fullscreen' ? ' workspace-main-assistant-fullscreen' : ''}`}
           style={{ ['--assistant-offset' as string]: `${assistantContentOffset}px` }}
         >
+        <section className="global-ai-command-bar" aria-label="Global AI Command Bar">
+          <div className="global-ai-command-shell">
+            <Sparkles size={18} aria-hidden="true" />
+            <form
+              className="global-ai-command-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                submitGlobalAiCommand();
+              }}
+            >
+              <input
+                value={globalAiCommand}
+                onChange={(event) => setGlobalAiCommand(event.target.value)}
+                placeholder="Напишіть дію: створити замовлення, знайти клієнта, показати борги..."
+                aria-label="Що потрібно зробити?"
+              />
+              <button type="submit" className="global-ai-command-submit" disabled={!globalAiCommand.trim()} title="Виконати команду">
+                <ArrowRight size={18} />
+                <span>Виконати</span>
+              </button>
+            </form>
+          </div>
+          <div className="global-ai-command-hint">
+            <span>AI-first навігація</span>
+            <span>роль: {roleDisplay(viewUser.role)}</span>
+          </div>
+        </section>
         {isNotificationsOpen && (
           <section className="panel notification-inline-panel" aria-label="Повідомлення менеджера">
             <div className="notification-inline-header">
@@ -12261,6 +12471,7 @@ useEffect(() => {
             createContractFromOrders={createContractFromOrders}
             initialSearch={globalClientSearch}
             focusedClientPhone={globalFocusedClientPhone}
+            openCreateRequest={openClientEditorRequest}
             onFocusedClientPhoneChange={setGlobalFocusedClientPhone}
             upsertClient={upsertClientRecord}
             openQuickOrderForClient={openQuickOrderForClient}
@@ -20994,6 +21205,7 @@ function ClientsPage({
   createContractFromOrders,
   initialSearch,
   focusedClientPhone,
+  openCreateRequest,
   onFocusedClientPhoneChange,
   upsertClient,
   openQuickOrderForClient,
@@ -21009,6 +21221,7 @@ function ClientsPage({
   createContractFromOrders: (payload: { client: string; startDate: string; endDate: string; orderIds: string[] }) => boolean;
   initialSearch?: string;
   focusedClientPhone?: string;
+  openCreateRequest?: number;
   onFocusedClientPhoneChange?: (phone: string) => void;
   upsertClient: (payload: { originalPhone?: string; name: string; phone: string; telegramId?: string; notificationChannel?: 'telegram' | 'sms' | 'both' | 'none'; email?: string; taxId?: string; legalType?: 'company' | 'fop' | 'person'; address?: string; comment?: string }) => boolean;
   openQuickOrderForClient: (client: ClientRecord) => void;
@@ -21038,6 +21251,7 @@ function ClientsPage({
     comment: string;
   }>(null);
   const [messageClient, setMessageClient] = useState<ClientRecord | null>(null);
+  const lastOpenCreateRequestRef = useRef(openCreateRequest ?? 0);
   const clientTypeLabel = (type?: ClientRecord['legalType']) => {
     if (type === 'company') return 'Компанія';
     if (type === 'fop') return 'ФОП';
@@ -21085,6 +21299,15 @@ function ClientsPage({
       if (focusedClientPhone) setIsClientDetailOpen(true);
     }
   }, [focusedClientPhone]);
+
+  useEffect(() => {
+    if (!openCreateRequest) return;
+    if (openCreateRequest === lastOpenCreateRequestRef.current) return;
+    lastOpenCreateRequestRef.current = openCreateRequest;
+    openClientEditor();
+    setIsClientDetailOpen(false);
+    setSelectedClientPhone('');
+  }, [openCreateRequest]);
   useEffect(() => {
     if (!selectedClientPhone) return;
     window.requestAnimationFrame(() => {
