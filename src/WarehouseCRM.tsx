@@ -373,6 +373,8 @@ type ServiceOrder = {
   takenFromLocation?: string;
   returnedToCellAt?: string;
   returnedToCellBy?: string;
+  issuedBy?: string;
+  issuedComment?: string;
   urgent?: boolean;
   clientNotified?: boolean;
   lastNotificationType?: NotificationEvent;
@@ -872,13 +874,14 @@ type ClientNotificationTemplate = {
 
 type SuggestedDocumentAction = {
   orderId: string;
-  kind: 'Рахунок на оплату' | 'Акт надання послуг' | 'Наряд на ремонт' | 'Гарантійний талон';
+  kind: ServiceOrderPreviewKind;
   title: string;
   text: string;
   autoOpen?: boolean;
 };
 
-type ServiceOrderDocumentKind = 'Рахунок на оплату' | 'Акт надання послуг' | 'Видаткова накладна' | 'Наряд на ремонт' | 'Гарантійний талон';
+type ServiceOrderPreviewKind = 'Квитанція прийому' | 'Рахунок на оплату' | 'Акт надання послуг' | 'Видаткова накладна' | 'Наряд на ремонт' | 'Гарантійний талон';
+type ServiceOrderDocumentKind = ServiceOrderPreviewKind;
 
 type DashboardFocusTarget = 'approval' | 'payment' | 'issue';
 
@@ -8067,36 +8070,61 @@ useEffect(() => {
       ...current,
     ]);
     setDocuments((current) => {
-      const number = `НР-${current.length + 1001}`;
+      const receiptNumber = nextDocumentNumber('Квитанція прийому', current);
+      const workOrderNumber = nextDocumentNumber('Наряд на ремонт', [
+        { id: uid('DOC-TMP'), kind: 'Квитанція прийому', number: receiptNumber, entityType: 'service_order', entityId: orderId, clientOrSupplier: order.client, createdAt: today, createdBy: orderAuthor.name, version: 1, status: 'PDF збережено', pdfPath: '' },
+        ...current,
+      ]);
       const totals = documentVatTotals(0);
-      return [{
+      const receiptDocument: PrintDocument = {
         id: uid('DOC'),
-        kind: 'Наряд на ремонт',
-        number,
+        kind: 'Квитанція прийому',
+        number: receiptNumber,
         entityType: 'service_order',
         entityId: orderId,
+        orderId,
         clientOrSupplier: order.client,
         createdAt: today,
         createdBy: orderAuthor.name,
         version: 1,
         status: 'PDF збережено',
-        pdfPath: `/documents/service_order/${orderId}/${number}.pdf`,
+        pdfPath: `/documents/service_order/${orderId}/${receiptNumber}.pdf`,
         amountNet: totals.amountNet,
         amountVat: totals.amountVat,
         amountGross: totals.amountGross,
-      }, ...current];
+        orderVersionNo: 1,
+      };
+      const workOrderDocument: PrintDocument = {
+        id: uid('DOC'),
+        kind: 'Наряд на ремонт',
+        number: workOrderNumber,
+        entityType: 'service_order',
+        entityId: orderId,
+        orderId,
+        clientOrSupplier: order.client,
+        createdAt: today,
+        createdBy: orderAuthor.name,
+        version: 1,
+        status: 'PDF збережено',
+        pdfPath: `/documents/service_order/${orderId}/${workOrderNumber}.pdf`,
+        amountNet: totals.amountNet,
+        amountVat: totals.amountVat,
+        amountGross: totals.amountGross,
+        orderVersionNo: 1,
+      };
+      return [receiptDocument, workOrderDocument, ...current];
     });
     setSelectedOrderId(orderId);
     enqueueClientNotification(order, 'Прийом пристрою');
     logAction('Швидкий прийом', orderId, `${order.client}: ${order.orderType} · ${order.device}.${engineer ? ` Інженер: ${engineer.name}.` : ''}`);
     logAction('Створення замовлення', orderId, `${order.client} · ${order.device} · статус Прийнято.`);
-    logAction('Автодокумент', orderId, 'Кнопка "Прийняти замовлення" автоматично створила наряд на ремонт.');
+    logAction('Автодокумент', orderId, 'Кнопка "Прийняти замовлення" автоматично створила квитанцію прийому і наряд на ремонт.');
     setNotice(`Замовлення створено: ${orderId}. Клієнта ${clientExists ? 'знайдено' : 'створено'}${engineer ? ', інженера призначено' : ''}.${prepayment ? ` Передплата ${money(prepayment.amount)} зафіксована.` : ''}${suggestedRepairLocation ? ` Комірку ${suggestedRepairLocation} закріплено.` : ''}`);
     setSuggestedDocumentAction({
       orderId,
-      kind: 'Наряд на ремонт',
+      kind: 'Квитанція прийому',
       title: 'Прийом завершено',
-      text: 'Замовлення створено. Система одразу відкриває наряд без ручного заповнення.',
+      text: 'Замовлення створено. Система одразу відкриває квитанцію з корешком і QR для друку.',
       autoOpen: true,
     });
     setQuickPhone('');
@@ -9180,7 +9208,7 @@ useEffect(() => {
       const linkedTaxInvoice = sourceOrder ? findLatestOrderTaxInvoice(taxInvoices, sourceOrder.id) : undefined;
       const linkedWaybillDocument = sourceOrder ? current.find((document) => document.entityType === 'service_order' && document.entityId === sourceOrder.id && document.kind === 'Видаткова накладна') : undefined;
       const latestAppliedPayment = sourceOrder?.payments.find((payment) => paymentCountsAsApplied(payment));
-      const snapshotData = sourceOrder && ['Рахунок на оплату', 'Акт надання послуг', 'Видаткова накладна', 'Гарантійний талон'].includes(kind)
+      const snapshotData = sourceOrder && ['Квитанція прийому', 'Рахунок на оплату', 'Акт надання послуг', 'Видаткова накладна', 'Наряд на ремонт', 'Гарантійний талон'].includes(kind)
         ? JSON.stringify(buildServiceOrderDocumentSnapshot(kind as ServiceOrderDocumentKind, sourceOrder, products, number, companySettings, clientTaxId(sourceOrder.client, sourceOrder.phone), {
           invoiceNumber: invoiceDocument?.number,
           invoiceDate: invoiceDocument?.createdAt,
@@ -9222,11 +9250,13 @@ useEffect(() => {
     return created;
   }
 
-  function ensureOrderDocumentRecord(kind: 'Рахунок на оплату' | 'Акт надання послуг' | 'Наряд на ремонт' | 'Гарантійний талон', order: ServiceOrder) {
+  function ensureOrderDocumentRecord(kind: ServiceOrderDocumentKind, order: ServiceOrder) {
     const statusByKind: Record<typeof kind, PrintDocument['status']> = {
+      'Квитанція прийому': 'Чернетка',
       'Наряд на ремонт': 'Чернетка',
       'Акт надання послуг': 'Створено',
       'Рахунок на оплату': orderTotals(order).debt > 0 ? 'Очікує оплати' : 'Готово',
+      'Видаткова накладна': 'Створено',
       'Гарантійний талон': 'Створено',
     };
     return addDocumentIfMissing(kind, 'service_order', order.id, order.client, statusByKind[kind], order);
@@ -9237,7 +9267,7 @@ useEffect(() => {
       document.entityType === 'service_order' && document.entityId === order.id && document.kind === kind
         ? {
             ...document,
-            status: document.kind === 'Акт надання послуг' || document.kind === 'Гарантійний талон' || document.kind === 'Видаткова накладна' ? normalizePrintDocumentStatus('Роздруковано') : normalizePrintDocumentStatus(document.status),
+            status: ['Квитанція прийому', 'Наряд на ремонт', 'Акт надання послуг', 'Гарантійний талон', 'Видаткова накладна'].includes(document.kind) ? normalizePrintDocumentStatus('Роздруковано') : normalizePrintDocumentStatus(document.status),
             printedAt: document.printedAt ?? today,
             printedBy: document.printedBy ?? activeUser.name,
           }
@@ -9273,7 +9303,7 @@ useEffect(() => {
     setNotice(`Акт для ${order.id} підписано. Замовлення можна завершувати далі по процесу.`);
   }
 
-  function logOrderDocumentPrint(order: ServiceOrder, kind: 'Рахунок на оплату' | 'Акт надання послуг' | 'Наряд на ремонт' | 'Гарантійний талон') {
+  function logOrderDocumentPrint(order: ServiceOrder, kind: ServiceOrderDocumentKind) {
     markDocumentPrinted(order, kind);
     setOrders((current) => current.map((item) => (
       item.id !== order.id
@@ -9618,8 +9648,8 @@ useEffect(() => {
           return;
         }
       }
-      if (sourceOrder && ['Рахунок на оплату', 'Акт надання послуг', 'Наряд на ремонт', 'Гарантійний талон'].includes(kind)) {
-        logOrderDocumentPrint(sourceOrder, kind as 'Рахунок на оплату' | 'Акт надання послуг' | 'Наряд на ремонт' | 'Гарантійний талон');
+      if (sourceOrder && ['Квитанція прийому', 'Рахунок на оплату', 'Акт надання послуг', 'Видаткова накладна', 'Наряд на ремонт', 'Гарантійний талон'].includes(kind)) {
+        logOrderDocumentPrint(sourceOrder, kind as ServiceOrderDocumentKind);
       } else {
         logAction('Друк документа', entityId, `${kind} повторно відкрито для друку.`);
       }
@@ -9654,7 +9684,7 @@ useEffect(() => {
     const snapshotPayload = sourceOrder
       ? {
           ...buildServiceOrderDocumentSnapshot(
-            kind as 'Рахунок на оплату' | 'Акт надання послуг' | 'Наряд на ремонт' | 'Гарантійний талон',
+            kind as ServiceOrderDocumentKind,
             sourceOrder,
             products,
             number,
@@ -10702,14 +10732,18 @@ useEffect(() => {
       if (item.id !== order.id) return item;
       return {
         ...item,
-        status: 'Закрито',
+        status: 'Видано',
         statusChangedAt: today,
+        issuedAt: today,
+        issuedBy: activeUser.name,
+        issuedComment: `Видано з комірки ${item.locationCode}.`,
+        locationStatus: 'Видано',
         actIssuedAt: item.legalEntity ? (item.actIssuedAt ?? today) : item.actIssuedAt,
         statusHistory: [
           {
             id: uid('H'),
             oldStatus: item.status,
-            newStatus: 'Закрито',
+            newStatus: 'Видано',
             changedBy: activeUser.name,
             changedAt: today,
             comment: `Менеджер видав замовлення клієнту. Дата видачі та користувач зафіксовані: ${activeUser.name}.`,
@@ -11271,15 +11305,18 @@ useEffect(() => {
       if (item.id !== issuedOrder.id) return item;
       return {
         ...item,
-        status: 'Закрито',
+        status: 'Видано',
         statusChangedAt: today,
+        issuedAt: today,
+        issuedBy: activeUser.name,
+        issuedComment: `Видано через міні-касу з комірки ${item.locationCode ?? issuedOrder.locationCode ?? 'не задано'}.`,
         locationStatus: 'Видано',
         actIssuedAt: item.legalEntity ? (item.actIssuedAt ?? today) : item.actIssuedAt,
         statusHistory: [
           {
             id: uid('H'),
             oldStatus: item.status,
-            newStatus: 'Закрито',
+            newStatus: 'Видано',
             changedBy: activeUser.name,
             changedAt: today,
             comment: `Менеджер видав замовлення клієнту через міні-касу. Дата видачі: ${today}.`,
@@ -15481,8 +15518,8 @@ function OrdersPage(props: {
   recordApprovalResponse: (approvalId: string, accepted: boolean, manual?: boolean) => void;
   markApprovalNoAnswer: (approvalId: string) => void;
   logRiskConfirmation: (order: ServiceOrder, action: string, risks: string[]) => void;
-  ensureOrderDocumentRecord: (kind: 'Рахунок на оплату' | 'Акт надання послуг' | 'Наряд на ремонт' | 'Гарантійний талон', order: ServiceOrder) => void;
-  logOrderDocumentPrint: (order: ServiceOrder, kind: 'Рахунок на оплату' | 'Акт надання послуг' | 'Наряд на ремонт' | 'Гарантійний талон') => void;
+  ensureOrderDocumentRecord: (kind: ServiceOrderDocumentKind, order: ServiceOrder) => void;
+  logOrderDocumentPrint: (order: ServiceOrder, kind: ServiceOrderDocumentKind) => void;
   signOrderAct: (order: ServiceOrder) => void;
   createTaxInvoiceForOrder: (orderId: string) => void;
   registerTaxInvoice: (orderId: string) => void;
@@ -17762,8 +17799,8 @@ function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations,
   recordApprovalResponse: (approvalId: string, accepted: boolean, manual?: boolean) => void;
   markApprovalNoAnswer: (approvalId: string) => void;
   logRiskConfirmation: (order: ServiceOrder, action: string, risks: string[]) => void;
-  ensureOrderDocumentRecord: (kind: 'Рахунок на оплату' | 'Акт надання послуг' | 'Наряд на ремонт' | 'Гарантійний талон', order: ServiceOrder) => void;
-  logOrderDocumentPrint: (order: ServiceOrder, kind: 'Рахунок на оплату' | 'Акт надання послуг' | 'Наряд на ремонт' | 'Гарантійний талон') => void;
+  ensureOrderDocumentRecord: (kind: ServiceOrderDocumentKind, order: ServiceOrder) => void;
+  logOrderDocumentPrint: (order: ServiceOrder, kind: ServiceOrderDocumentKind) => void;
   signOrderAct: (order: ServiceOrder) => void;
   createTaxInvoiceForOrder: (orderId: string) => void;
   registerTaxInvoice: (orderId: string) => void;
@@ -17820,7 +17857,7 @@ function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations,
   const [isDocumentPreviewOpen, setIsDocumentPreviewOpen] = useState(false);
   const [isLabelPreviewOpen, setIsLabelPreviewOpen] = useState(false);
   const [pendingLocationCode, setPendingLocationCode] = useState(selectedOrder.locationCode ?? '');
-  const [selectedDocumentKind, setSelectedDocumentKind] = useState<'Рахунок на оплату' | 'Акт надання послуг' | 'Видаткова накладна' | 'Наряд на ремонт' | 'Гарантійний талон'>('Наряд на ремонт');
+  const [selectedDocumentKind, setSelectedDocumentKind] = useState<ServiceOrderPreviewKind>('Квитанція прийому');
   const [documentPreviewNonce, setDocumentPreviewNonce] = useState(0);
   const [isMiniCashOpen, setIsMiniCashOpen] = useState(false);
   const documentIframeRef = React.useRef<HTMLIFrameElement | null>(null);
@@ -17970,7 +18007,8 @@ function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations,
       ? 'ОЧІКУВАННЯ'
       : 'РЕМОНТ';
   const labelLocationStateText = selectedOrder.locationStatus === 'У інженера' ? 'У ІНЖЕНЕРА' : selectedOrder.locationStatus === 'У комірці' ? 'В ЯЧЕЙЦІ' : 'ПОЗА ЯЧЕЙКОЮ';
-  const documentNumberByKind: Record<'Рахунок на оплату' | 'Акт надання послуг' | 'Видаткова накладна' | 'Наряд на ремонт' | 'Гарантійний талон', string> = {
+  const documentNumberByKind: Record<ServiceOrderPreviewKind, string> = {
+    'Квитанція прийому': documents.find((document) => document.kind === 'Квитанція прийому' && document.entityId === selectedOrder.id)?.number ?? `${documentPrefix['Квитанція прийому']}-${selectedOrder.id.replace(/\D/g, '')}`,
     'Рахунок на оплату': documents.find((document) => document.kind === 'Рахунок на оплату' && document.entityId === selectedOrder.id)?.number ?? `${documentPrefix['Рахунок на оплату']}-${selectedOrder.id.replace(/\D/g, '')}`,
     'Акт надання послуг': documents.find((document) => document.kind === 'Акт надання послуг' && document.entityId === selectedOrder.id)?.number ?? `${documentPrefix['Акт надання послуг']}-${selectedOrder.id.replace(/\D/g, '')}`,
     'Видаткова накладна': documents.find((document) => document.kind === 'Видаткова накладна' && document.entityId === selectedOrder.id)?.number ?? `${documentPrefix['Видаткова накладна']}-${selectedOrder.id.replace(/\D/g, '')}`,
@@ -18045,8 +18083,8 @@ function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations,
       : '<tr><td class="center">1</td><td>Запчастини не використовувались</td><td class="center">0</td><td class="right">0 грн</td><td class="right">0 грн</td></tr>'
   );
   const renderSimpleListHtml = (itemsHtml: string) => `<div>${itemsHtml || 'Не заповнено'}</div>`;
-  const documentDateForKind = (kind: 'Рахунок на оплату' | 'Акт надання послуг' | 'Видаткова накладна' | 'Наряд на ремонт' | 'Гарантійний талон') => {
-    if (kind === 'Наряд на ремонт') return extractDayKey(selectedOrder.intakeDate);
+  const documentDateForKind = (kind: ServiceOrderPreviewKind) => {
+    if (kind === 'Квитанція прийому' || kind === 'Наряд на ремонт') return extractDayKey(selectedOrder.intakeDate);
     if (kind === 'Акт надання послуг') return extractDayKey(selectedOrder.statusChangedAt);
     return today;
   };
@@ -18087,6 +18125,50 @@ function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations,
     };
     const frozenWorksList = documentSnapshot?.worksList ?? worksList;
     const frozenPartsList = documentSnapshot?.partsList ?? partsList;
+    if (selectedDocumentKind === 'Квитанція прийому') {
+      return `
+        <!doctype html><html lang="uk"><head><meta charset="UTF-8" /><style>${serviceDocumentPreviewCss}
+        .intake-qr { width: 26mm; height: 26mm; border: 1px solid #333; object-fit: contain; }
+        .intake-head { display: grid; grid-template-columns: 1fr 30mm; gap: 6mm; align-items: start; }
+        .tear-off { margin-top: 10mm; padding-top: 5mm; border-top: 1px dashed #111; display: grid; grid-template-columns: 1fr 28mm; gap: 5mm; align-items: center; }
+        .tear-title { font-size: 12pt; font-weight: 700; margin-bottom: 2mm; }
+        .stub-grid { display: grid; grid-template-columns: 24mm 1fr; gap: 1.5mm 3mm; font-size: 10pt; }
+        </style><title>Квитанція прийому ${escapeHtml(selectedOrder.id)}</title></head><body>
+        <section class="sheet compact">
+          <div class="small">${escapeHtml(companySettings.companyName)} · ${escapeHtml(companySettings.address)} · ${escapeHtml(companySettings.phone)} · ${escapeHtml(companySettings.mainEmail)}</div>
+          <div class="intake-head">
+            <div>
+              <div class="title" style="text-align:left;margin:7mm 0 1mm;">КВИТАНЦІЯ ПРИЙОМУ</div>
+              <div class="doc-line">№ ${common.orderNumber} · замовлення ${escapeHtml(selectedOrder.id)} · ${common.date}</div>
+            </div>
+            <img class="intake-qr" src="https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(directOrderUrl)}" alt="QR ${escapeHtml(selectedOrder.id)}" />
+          </div>
+          <div class="meta-grid">
+            <div class="meta-row"><div class="label">Клієнт:</div><div class="value-line">${common.clientName}</div></div>
+            <div class="meta-row"><div class="label">Телефон:</div><div class="value-line">${common.phone}</div></div>
+            <div class="meta-row"><div class="label">Пристрій:</div><div class="value-line">${common.device}</div></div>
+            <div class="meta-row"><div class="label">Модель:</div><div class="value-line">${escapeHtml(selectedOrder.brandModel ?? selectedOrder.device)}</div></div>
+            <div class="meta-row"><div class="label">Серійний №:</div><div class="value-line">${common.serialNumber}</div></div>
+            <div class="meta-row"><div class="label">Комірка:</div><div class="value-line">${escapeHtml(selectedOrder.locationCode ?? 'не призначено')}</div></div>
+          </div>
+          <table class="doc-table"><tbody>
+            <tr><td style="width:45mm;">Заявлена несправність</td><td>${common.problem}</td></tr>
+            <tr><td>Комплектація</td><td>${escapeHtml(selectedOrder.complectation ?? 'Не вказано')}</td></tr>
+            <tr><td>Зовнішній стан</td><td>${escapeHtml(selectedOrder.appearance ?? 'Не вказано')}</td></tr>
+            <tr><td>Попередня вартість</td><td>${escapeHtml(selectedOrder.estimatedAmount ? money(selectedOrder.estimatedAmount) : 'Уточнюється після діагностики')}</td></tr>
+            <tr><td>Менеджер</td><td>${common.managerName}</td></tr>
+          </tbody></table>
+          <div class="terms-box tiny"><p>Пристрій прийнято зі слів клієнта. Остаточна вартість і строк виконання підтверджуються після діагностики або погодження додаткових робіт.</p></div>
+          <div class="signature-row two"><div class="signature-block"><div>Підпис клієнта</div><div class="signature-line"></div><div class="right">${common.clientName}</div></div><div class="signature-block"><div>Підпис співробітника</div><div class="signature-line"></div><div class="right">${common.managerName}</div></div></div>
+          <div class="tear-off">
+            <div>
+              <div class="tear-title">Відривний корешок клієнта</div>
+              <div class="stub-grid"><span>Замовлення:</span><strong>${escapeHtml(selectedOrder.id)}</strong><span>Пристрій:</span><strong>${common.device}</strong><span>Телефон:</span><strong>${common.phone}</strong><span>Дата:</span><strong>${common.date}</strong><span>Комірка:</span><strong>${escapeHtml(selectedOrder.locationCode ?? 'не призначено')}</strong></div>
+            </div>
+            <img class="intake-qr" src="https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(directOrderUrl)}" alt="QR ${escapeHtml(selectedOrder.id)}" />
+          </div>
+        </section></body></html>`;
+    }
     if (selectedDocumentKind === 'Рахунок на оплату') {
       return renderTemplate(invoiceTemplateHtml, {
         'document.css': serviceDocumentPreviewCss,
@@ -18211,8 +18293,8 @@ function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations,
         <div class="signature-row"><div class="signature-block"><div>Виконав ремонт:</div><div class="signature-line"></div><div class="right">${common.engineerName}</div></div><div class="signature-block"><div>Менеджер</div><div class="signature-line"></div><div class="right">${common.managerName}</div></div><div class="signature-block"><div>Дата завершення ремонту</div><div class="signature-line">${escapeHtml(extractDayKey(selectedOrder.statusChangedAt))}</div></div></div>
         <div class="meta-row"><div class="label">З умовами ремонту згоден:</div><div class="value-line">${common.clientName}</div></div>
       </section></body></html>`;
-  }, [documents, orderClientDetails.address, products, selectedDocumentKind, selectedOrder, totals.debt, totals.paid, totals.total]);
-  const openDocumentPreview = (kind: 'Рахунок на оплату' | 'Акт надання послуг' | 'Видаткова накладна' | 'Наряд на ремонт' | 'Гарантійний талон') => {
+  }, [directOrderUrl, documents, orderClientDetails.address, products, selectedDocumentKind, selectedOrder, totals.debt, totals.paid, totals.total]);
+  const openDocumentPreview = (kind: ServiceOrderPreviewKind) => {
     const validationError = validateDocumentPreview(kind);
     if (validationError) {
       notifyUser(validationError);
@@ -18231,7 +18313,7 @@ function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations,
         return;
       }
       printServiceOrderDocument(selectedDocumentKind, selectedOrder);
-    } else if (selectedDocumentKind === 'Наряд на ремонт' || selectedDocumentKind === 'Гарантійний талон') {
+    } else if (selectedDocumentKind === 'Квитанція прийому' || selectedDocumentKind === 'Наряд на ремонт' || selectedDocumentKind === 'Гарантійний талон') {
       ensureOrderDocumentRecord(selectedDocumentKind, selectedOrder);
       logOrderDocumentPrint(selectedOrder, selectedDocumentKind);
     }
@@ -18239,8 +18321,8 @@ function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations,
     frameWindow.focus();
     frameWindow.print();
   };
-  const validateDocumentPreview = (kind: 'Рахунок на оплату' | 'Акт надання послуг' | 'Видаткова накладна' | 'Наряд на ремонт' | 'Гарантійний талон') => {
-    if (kind === 'Наряд на ремонт') return '';
+  const validateDocumentPreview = (kind: ServiceOrderPreviewKind) => {
+    if (kind === 'Квитанція прийому' || kind === 'Наряд на ремонт') return '';
     if (['Рахунок на оплату', 'Акт надання послуг', 'Видаткова накладна'].includes(kind) && !hasDocument(kind as DocumentKind)) return `Спочатку створіть документ "${kind}".`;
     if (kind === 'Видаткова накладна' && selectedOrder.parts.filter((part) => part.status !== 'Повернення').length === 0) return 'Видаткова накладна доступна тільки якщо в замовленні є товарні позиції.';
     if (kind === 'Рахунок на оплату' && totals.total <= 0) return 'Рахунок доступний тільки коли в замовленні є сума.';
@@ -18414,6 +18496,9 @@ function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations,
         {canShowManagerView && <Info label="Останнє повідомлення" value={selectedOrder.lastNotificationType ? `${notificationDisplay(selectedOrder.lastNotificationType)} · ${selectedOrder.lastNotificationAt ?? 'без дати'}` : 'Ще не надсилали'} />}
         {canShowManagerView && <Info label="К выдаче" value={canIssueOrder ? 'Можно выдать' : 'Ещё не готово'} />}
         {canShowManagerView && <Info label="Локація" value={selectedOrder.locationCode ?? 'Не призначено'} />}
+        {canShowManagerView && currentLocation && <Info label="Стелаж / полиця" value={`${currentLocation.rack}-${currentLocation.shelf}`} />}
+        {canShowManagerView && <Info label="Статус зберігання" value={selectedOrder.locationStatus ?? 'не задано'} />}
+        {canShowManagerView && selectedOrder.issuedAt && <Info label="Видав" value={`${selectedOrder.issuedBy ?? 'не вказано'} · ${selectedOrder.issuedAt}`} />}
         {canShowManagerView && <Info label="Інженер" value={selectedOrder.engineer} />}
         {canShowManagerView && <Info label="Створив / прийняв" value={orderCreatorName} />}
         {canShowManagerView && <Info label="Дата прийому" value={selectedOrder.intakeDate} />}
@@ -18469,6 +18554,7 @@ function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations,
                 <Info label="Номер замовлення" value={selectedOrder.id} />
                 <Info label="Статус" value={statusDisplay(selectedOrder.status)} />
                 <Info label="Комірка" value={selectedOrder.locationCode ?? 'Не призначено'} />
+                <Info label="Стелаж / полиця" value={currentLocation ? `${currentLocation.rack}-${currentLocation.shelf}` : 'Не призначено'} />
                 <Info label="Клієнт" value={selectedOrder.client} />
                 <Info label="Телефон" value={selectedOrder.phone} />
                 <Info label="Пристрій" value={selectedOrder.device} />
@@ -18532,8 +18618,9 @@ function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations,
                 <button type="button" onClick={managerAcceptIntoWork} disabled={!managerCanAcceptIntoWork}>Передати інженеру</button>
                 <button type="button" onClick={() => sendRepairApproval(selectedOrder, 'Telegram')} disabled={statusActionCriticalMessages.length > 0}>Відправити на погодження</button>
                 <button type="button" onClick={() => openLabelPreview()}>Печать наклейки</button>
+                <button type="button" onClick={() => openDocumentPreview('Квитанція прийому')}>Печать квитанції</button>
                 <button type="button" onClick={() => openDocumentPreview('Наряд на ремонт')} disabled={!canPreviewWorkOrder}>Печать наряда</button>
-                <button type="button" onClick={() => canPreviewAct ? openDocumentPreview('Акт надання послуг') : canPreviewInvoice ? openDocumentPreview('Рахунок на оплату') : openDocumentPreview('Наряд на ремонт')}>Відкрити документи</button>
+                <button type="button" onClick={() => canPreviewAct ? openDocumentPreview('Акт надання послуг') : canPreviewInvoice ? openDocumentPreview('Рахунок на оплату') : openDocumentPreview('Квитанція прийому')}>Відкрити документи</button>
                 <button type="button" onClick={managerMarkReadyForIssue} disabled={!managerCanMarkReadyForIssue}>Підготувати до видачі</button>
                 <button type="button" onClick={() => setIsMiniCashOpen(true)} disabled={!managerCanTakePayment}>Прийняти оплату</button>
                 <button type="button" onClick={handleManagerIssueClick} disabled={!managerCanIssueFromCard || issueCriticalMessages.length > 0}>Видати замовлення</button>
@@ -18782,6 +18869,12 @@ function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations,
           )}
           <div className="action-row secondary-actions">
             {canPreviewWorkOrder && (
+              <button type="button" onClick={() => openDocumentPreview('Квитанція прийому')} style={documentButtonStyle('#475569')}>
+                <ClipboardList size={16} />
+                <span>Квитанція</span>
+              </button>
+            )}
+            {canPreviewWorkOrder && (
               <button type="button" onClick={() => openDocumentPreview('Наряд на ремонт')} style={documentButtonStyle('#8b5e34')}>
                 <ClipboardList size={16} />
                 <span>Печать наряда</span>
@@ -18822,7 +18915,7 @@ function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations,
             {isAdminRole && canFormTechnicalAct && !hasDocument('Акт технічного стану') && <button type="button" onClick={() => printDocument('Акт технічного стану', 'service_order', selectedOrder.id, selectedOrder.client)}>Сформувати акт технічного стану</button>}
             {isAdminRole && canTransferBas && <button type="button" onClick={() => transferOrderToBas(selectedOrder)}>Передати в BAS</button>}
             {!canPreviewAct && !canPreviewInvoice && !canPreviewWarranty && (
-              <div className="empty-state">Сейчас доступен наряд. Рахунок появится при сумме заказа, акт на этапе готовности, гарантия после выдачи.</div>
+              <div className="empty-state">Сейчас доступны квитанция, корешок, наклейка и наряд. Рахунок появится при сумме заказа, акт на этапе готовности, гарантия после выдачи.</div>
             )}
           </div>
         </section>
@@ -19050,7 +19143,7 @@ function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations,
           <div style={{ width: 'min(1100px, 100%)', maxHeight: '92vh', backgroundColor: '#f4f1ea', border: '1px solid #b5aa98', boxShadow: '0 18px 48px rgba(15, 23, 42, 0.28)', display: 'grid', gridTemplateRows: 'auto auto 1fr auto', overflow: 'hidden' }}>
             <div style={{ padding: '14px 18px 10px', borderBottom: '1px solid #cfc4b2' }}>
               <div className="panel-heading" style={{ marginBottom: 0 }}>
-                <h2>{selectedDocumentKind === 'Наряд на ремонт' ? 'Печать наряда' : selectedDocumentKind === 'Рахунок на оплату' ? 'Рахунок' : selectedDocumentKind === 'Акт надання послуг' ? 'Акт выполненных работ' : selectedDocumentKind === 'Видаткова накладна' ? 'Видаткова накладна' : 'Гарантийный талон'}</h2>
+                <h2>{selectedDocumentKind === 'Квитанція прийому' ? 'Квитанція прийому' : selectedDocumentKind === 'Наряд на ремонт' ? 'Печать наряда' : selectedDocumentKind === 'Рахунок на оплату' ? 'Рахунок' : selectedDocumentKind === 'Акт надання послуг' ? 'Акт выполненных работ' : selectedDocumentKind === 'Видаткова накладна' ? 'Видаткова накладна' : 'Гарантийный талон'}</h2>
                 <span>{selectedOrder.id} · {selectedOrder.client} · формат A4</span>
               </div>
             </div>
