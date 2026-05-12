@@ -1013,6 +1013,7 @@ type AuthMode = 'phone_code' | 'email_password';
 type UserPermissions = {
   canAccessWarehouse: boolean;
   canAccessFinance: boolean;
+  canAccessDocuments: boolean;
   canAccessEmployees: boolean;
   canAccessSettings: boolean;
   canAccessReports: boolean;
@@ -1154,6 +1155,18 @@ type AppToast = {
   id: string;
   message: string;
   tone: 'success' | 'error' | 'warning' | 'info';
+};
+
+type GlobalCommandResult = 'success' | 'warning' | 'error';
+type GlobalCommandHistoryEntry = {
+  id: string;
+  command: string;
+  response: string;
+  steps?: string[];
+  time: string;
+  role: string;
+  section: string;
+  result: GlobalCommandResult;
 };
 
 const navItems: Array<{ id: Page; label: string; icon: React.ReactNode }> = [
@@ -2825,6 +2838,7 @@ const SYSTEM_USER: User = {
   permissions: {
     canAccessWarehouse: true,
     canAccessFinance: true,
+    canAccessDocuments: true,
     canAccessEmployees: true,
     canAccessSettings: true,
     canAccessReports: true,
@@ -4602,27 +4616,27 @@ function findExactClientMatch(clients: ClientRecord[], rawNeedle: string) {
 function defaultPermissionsForRole(role: Role): UserPermissions {
   const normalizedRole = normalizeRoleAlias(role);
   if (normalizedRole === 'Адміністратор') {
-    return { canAccessWarehouse: true, canAccessFinance: true, canAccessEmployees: true, canAccessSettings: true, canAccessReports: true };
+    return { canAccessWarehouse: true, canAccessFinance: true, canAccessDocuments: true, canAccessEmployees: true, canAccessSettings: true, canAccessReports: true };
   }
   if (isDirectorRole(normalizedRole)) {
-    return { canAccessWarehouse: true, canAccessFinance: true, canAccessEmployees: true, canAccessSettings: false, canAccessReports: true };
+    return { canAccessWarehouse: true, canAccessFinance: true, canAccessDocuments: true, canAccessEmployees: true, canAccessSettings: false, canAccessReports: true };
   }
   if (normalizedRole === 'Менеджер') {
-    return { canAccessWarehouse: false, canAccessFinance: false, canAccessEmployees: false, canAccessSettings: false, canAccessReports: false };
+    return { canAccessWarehouse: false, canAccessFinance: false, canAccessDocuments: false, canAccessEmployees: false, canAccessSettings: false, canAccessReports: false };
   }
   if (normalizedRole === 'Інженер') {
-    return { canAccessWarehouse: false, canAccessFinance: false, canAccessEmployees: false, canAccessSettings: false, canAccessReports: false };
+    return { canAccessWarehouse: false, canAccessFinance: false, canAccessDocuments: false, canAccessEmployees: false, canAccessSettings: false, canAccessReports: false };
   }
   if (normalizedRole === 'Бухгалтер') {
-    return { canAccessWarehouse: false, canAccessFinance: true, canAccessEmployees: false, canAccessSettings: false, canAccessReports: true };
+    return { canAccessWarehouse: false, canAccessFinance: true, canAccessDocuments: true, canAccessEmployees: false, canAccessSettings: false, canAccessReports: true };
   }
   if (isWarehouseRole(normalizedRole)) {
-    return { canAccessWarehouse: true, canAccessFinance: false, canAccessEmployees: false, canAccessSettings: false, canAccessReports: false };
+    return { canAccessWarehouse: true, canAccessFinance: false, canAccessDocuments: false, canAccessEmployees: false, canAccessSettings: false, canAccessReports: false };
   }
   if (normalizedRole === 'Закупник') {
-    return { canAccessWarehouse: true, canAccessFinance: false, canAccessEmployees: false, canAccessSettings: false, canAccessReports: true };
+    return { canAccessWarehouse: true, canAccessFinance: false, canAccessDocuments: false, canAccessEmployees: false, canAccessSettings: false, canAccessReports: true };
   }
-  return { canAccessWarehouse: false, canAccessFinance: false, canAccessEmployees: false, canAccessSettings: false, canAccessReports: false };
+  return { canAccessWarehouse: false, canAccessFinance: false, canAccessDocuments: false, canAccessEmployees: false, canAccessSettings: false, canAccessReports: false };
 }
 
 function normalizeUserRecord(user: User): User {
@@ -4684,7 +4698,8 @@ function hasAccess(role: Role, page: Page) {
 function hasPermissionBasedPageAccess(user: User, page: Page) {
   if (user.role === 'Адміністратор' || isDirectorRole(user.role)) return true;
   if (['parts', 'purchases', 'storage', 'movements'].includes(page)) return user.permissions.canAccessWarehouse;
-  if (['finance', 'cash', 'documents', 'bank-import', 'tax-invoices'].includes(page)) return user.permissions.canAccessFinance;
+  if (page === 'documents') return user.permissions.canAccessDocuments;
+  if (['finance', 'cash', 'bank-import', 'tax-invoices'].includes(page)) return user.permissions.canAccessFinance;
   if (['employee-control', 'team', 'payroll'].includes(page)) return user.permissions.canAccessEmployees;
   if (page === 'reports') return user.permissions.canAccessReports;
   if (page === 'settings') return user.permissions.canAccessSettings;
@@ -5052,7 +5067,7 @@ function simpleLedgerPaymentLabel(order: ServiceOrder) {
 
 function inferToastTone(message: string): AppToast['tone'] {
   const normalized = message.toLowerCase();
-  if (normalized.includes('не вдалося') || normalized.includes('не можна') || normalized.includes('неможливо') || normalized.includes('помилка') || normalized.includes('недостатньо')) return 'error';
+  if (normalized.includes('не вдалося') || normalized.includes('не можна') || normalized.includes('неможливо') || normalized.includes('помилка') || normalized.includes('недостатньо') || normalized.includes('немає доступу')) return 'error';
   if (normalized.includes('ризик') || normalized.includes('простроч') || normalized.includes('завис') || normalized.includes('увага') || normalized.includes('без оплати')) return 'warning';
   if (normalized.includes('створено') || normalized.includes('прийнято') || normalized.includes('додано') || normalized.includes('оновлено') || normalized.includes('видано') || normalized.includes('відправлено') || normalized.includes('підтверджено')) return 'success';
   return 'info';
@@ -5195,6 +5210,9 @@ useEffect(() => {
   const [openQuickOrderRequest, setOpenQuickOrderRequest] = useState(0);
   const [openClientEditorRequest, setOpenClientEditorRequest] = useState(0);
   const [globalAiCommand, setGlobalAiCommand] = useState('');
+  const [globalAiResult, setGlobalAiResult] = useState<GlobalCommandHistoryEntry | null>(null);
+  const [globalAiHistory, setGlobalAiHistory] = useState<GlobalCommandHistoryEntry[]>([]);
+  const [isGlobalAiHistoryOpen, setIsGlobalAiHistoryOpen] = useState(false);
   const [showGlobalSearchResults, setShowGlobalSearchResults] = useState(false);
   const [users, setUsers] = useState<User[]>(() => mergeTestAuthUsers(loadEmployeesFromStorage()));
   const [products, setProducts] = useState<Product[]>(() => loadProductsFromStorage());
@@ -5611,9 +5629,10 @@ useEffect(() => {
     const toastId = uid('TOAST');
     const tone = inferToastTone(notice);
     setToasts((current) => [...current, { id: toastId, message: notice, tone }].slice(-5));
+    const timeoutMs = tone === 'success' ? 4500 : tone === 'warning' || tone === 'error' ? 6500 : 5000;
     const timeout = window.setTimeout(() => {
       setToasts((current) => current.filter((toast) => toast.id !== toastId));
-    }, 2800);
+    }, timeoutMs);
     return () => window.clearTimeout(timeout);
   }, [notice]);
 
@@ -6505,7 +6524,7 @@ useEffect(() => {
       }
       return {
         title: 'AI: доступ до документів',
-        text: `Для ролі ${roleDisplay(viewUser.role)} розділ документів недоступний.`,
+        text: 'У вас немає доступу до документів. Зверніться до адміністратора або змініть права користувача.',
         context: assistantContextSummary,
       };
     }
@@ -6705,20 +6724,23 @@ useEffect(() => {
     if (!input) return;
     const normalized = normalizeLooseText(input);
     const hasAny = (words: string[]) => words.some((word) => normalized.includes(normalizeLooseText(word)));
-    const canOpen = (targetPage: Page, deniedText: string) => {
-      if (canViewPage(targetPage)) return true;
-      pushAssistantMessages([{
-        id: uid('AI'),
-        author: 'assistant',
-        title: 'AI Command Bar: доступ обмежено',
-        text: deniedText,
-        context: assistantContextSummary,
-        createdAt: assistantTimestamp(),
-      }]);
-      setNotice(deniedText);
-      return false;
+    const activeSectionLabel = navItems.find((item) => item.id === page)?.label ?? page;
+    const rememberCommandResult = (response: string, steps: string[] | undefined, result: GlobalCommandResult) => {
+      const entry: GlobalCommandHistoryEntry = {
+        id: uid('CMD'),
+        command: input,
+        response,
+        steps,
+        time: assistantTimestamp(),
+        role: roleDisplay(viewUser.role),
+        section: activeSectionLabel,
+        result,
+      };
+      setGlobalAiResult(entry);
+      setGlobalAiHistory((current) => [entry, ...current].slice(0, 10));
     };
-    const reply = (title: string, text: string, steps?: string[]) => {
+    const reply = (title: string, text: string, steps?: string[], result: GlobalCommandResult = 'success') => {
+      rememberCommandResult(text, steps, result);
       pushAssistantMessages([
         {
           id: uid('AI'),
@@ -6738,6 +6760,11 @@ useEffect(() => {
         },
       ]);
       setNotice(text);
+    };
+    const canOpen = (targetPage: Page, deniedText: string) => {
+      if (canViewPage(targetPage)) return true;
+      reply('AI Command Bar: доступ обмежено', deniedText, ['Зверніться до адміністратора.', 'Або змініть права конкретного користувача в налаштуваннях співробітників.'], 'error');
+      return false;
     };
 
     setIsAssistantVisible(true);
@@ -6764,6 +6791,7 @@ useEffect(() => {
         'AI Command Bar: потрібне підтвердження',
         'Ця дія може змінити гроші, склад, права або дані. На першому етапі я не виконую її автоматично.',
         ['Відкрийте відповідний розділ.', 'Перевірте дані вручну.', 'Підтвердіть дію кнопкою у класичному інтерфейсі.'],
+        'warning',
       );
       return;
     }
@@ -6842,7 +6870,7 @@ useEffect(() => {
     }
 
     if (hasAny(['рахунок', 'рахунку', 'счет', 'счёт', 'invoice', 'документ', 'pdf', 'друк', 'печать'])) {
-      if (!canOpen('documents', 'У вас немає доступу до документів.')) return;
+      if (!canOpen('documents', 'У вас немає доступу до документів. Зверніться до адміністратора або змініть права користувача.')) return;
       setPage('documents');
       reply(
         'AI Command Bar: документи',
@@ -6863,6 +6891,7 @@ useEffect(() => {
 
     const fallback = buildAssistantReply(input);
     if (fallback.actions?.[0]) fallback.actions[0].run();
+    rememberCommandResult(fallback.text, fallback.steps, fallback.actions?.length ? 'success' : 'warning');
     pushAssistantMessages([
       {
         id: uid('AI'),
@@ -12220,6 +12249,48 @@ useEffect(() => {
             <span>AI-first навігація</span>
             <span>роль: {roleDisplay(viewUser.role)}</span>
           </div>
+          {globalAiResult && (
+            <div className={`global-ai-command-result global-ai-command-result-${globalAiResult.result}`} role={globalAiResult.result === 'error' ? 'alert' : 'status'}>
+              <div className="global-ai-command-result-main">
+                <div className="global-ai-command-result-meta">
+                  <span>{globalAiResult.result === 'success' ? 'Виконано' : globalAiResult.result === 'warning' ? 'Потрібна увага' : 'Доступ обмежено'}</span>
+                  <small>{globalAiResult.time} · {globalAiResult.section}</small>
+                </div>
+                <p>{globalAiResult.response}</p>
+                {globalAiResult.steps?.length ? (
+                  <ol>
+                    {globalAiResult.steps.slice(0, 4).map((step) => <li key={step}>{step}</li>)}
+                  </ol>
+                ) : null}
+              </div>
+              <button type="button" className="global-ai-command-result-close" onClick={() => setGlobalAiResult(null)} aria-label="Закрити результат команди">
+                <X size={16} />
+              </button>
+            </div>
+          )}
+          <div className="global-ai-command-history-tools">
+            <button type="button" onClick={() => setIsGlobalAiHistoryOpen((current) => !current)} disabled={globalAiHistory.length === 0}>
+              Історія команд{globalAiHistory.length ? ` · ${globalAiHistory.length}` : ''}
+            </button>
+            {globalAiHistory.length > 0 && (
+              <button type="button" onClick={() => { setGlobalAiHistory([]); setGlobalAiResult(null); setIsGlobalAiHistoryOpen(false); }}>
+                Очистити історію
+              </button>
+            )}
+          </div>
+          {isGlobalAiHistoryOpen && globalAiHistory.length > 0 && (
+            <div className="global-ai-command-history" aria-label="Останні команди Global AI Command Bar">
+              {globalAiHistory.map((entry) => (
+                <article key={entry.id} className={`global-ai-command-history-item global-ai-command-history-item-${entry.result}`}>
+                  <div>
+                    <strong>{entry.command}</strong>
+                    <p>{entry.response}</p>
+                  </div>
+                  <small>{entry.time} · {entry.role} · {entry.section}</small>
+                </article>
+              ))}
+            </div>
+          )}
         </section>
         {isNotificationsOpen && (
           <section className="panel notification-inline-panel" aria-label="Повідомлення менеджера">
@@ -23601,6 +23672,7 @@ function TeamPage({ users, setUsers, activeUser }: { users: User[]; setUsers: Re
   const permissionLabels: Array<{ key: keyof UserPermissions; label: string }> = [
     { key: 'canAccessWarehouse', label: 'Склад' },
     { key: 'canAccessFinance', label: 'Фінанси' },
+    { key: 'canAccessDocuments', label: 'Документи' },
     { key: 'canAccessEmployees', label: 'Співробітники' },
     { key: 'canAccessSettings', label: 'Налаштування' },
     { key: 'canAccessReports', label: 'Звіти' },
@@ -23859,6 +23931,7 @@ function TeamPage({ users, setUsers, activeUser }: { users: User[]; setUsers: Re
                   <span>{person.session}</span>
                   <span>Склад: {person.permissions.canAccessWarehouse ? 'так' : 'ні'}</span>
                   <span>Фінанси: {person.permissions.canAccessFinance ? 'так' : 'ні'}</span>
+                  <span>Документи: {person.permissions.canAccessDocuments ? 'так' : 'ні'}</span>
                   <span>Співробітники: {person.permissions.canAccessEmployees ? 'так' : 'ні'}</span>
                   <span>Налаштування: {person.permissions.canAccessSettings ? 'так' : 'ні'}</span>
                   <span>Звіти: {person.permissions.canAccessReports ? 'так' : 'ні'}</span>
