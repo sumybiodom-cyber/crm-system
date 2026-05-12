@@ -5246,6 +5246,7 @@ useEffect(() => {
   const [quickClientName, setQuickClientName] = useState('');
   const [quickClientEmail, setQuickClientEmail] = useState('');
   const [quickClientTaxId, setQuickClientTaxId] = useState('');
+  const [quickExistingClientOrderMode, setQuickExistingClientOrderMode] = useState(false);
   const [quickOrderType, setQuickOrderType] = useState<IntakeOrderType>('ремонт');
   const [quickDeviceType, setQuickDeviceType] = useState<IntakeDeviceType>('ноутбук');
   const [quickDevice, setQuickDevice] = useState('');
@@ -5701,6 +5702,7 @@ useEffect(() => {
     setQuickClientName(client.name);
     setQuickClientEmail(client.email ?? '');
     setQuickClientTaxId(client.taxId ?? '');
+    setQuickExistingClientOrderMode(true);
     setQuickOrderType('ремонт');
     setQuickDeviceType('ноутбук');
     setQuickDevice('');
@@ -8073,6 +8075,7 @@ useEffect(() => {
     setQuickClientName('');
     setQuickClientEmail('');
     setQuickClientTaxId('');
+    setQuickExistingClientOrderMode(false);
     setQuickOrderType('ремонт');
     setQuickDeviceType('ноутбук');
     setQuickDevice('');
@@ -12292,6 +12295,7 @@ useEffect(() => {
                 quickClientName={quickClientName}
                 quickClientEmail={quickClientEmail}
                 quickClientTaxId={quickClientTaxId}
+                quickExistingClientOrderMode={quickExistingClientOrderMode}
                 quickOrderType={quickOrderType}
                 quickDeviceType={quickDeviceType}
                 quickDevice={quickDevice}
@@ -12314,6 +12318,7 @@ useEffect(() => {
                 setQuickClientName={setQuickClientName}
                 setQuickClientEmail={setQuickClientEmail}
                 setQuickClientTaxId={setQuickClientTaxId}
+                setQuickExistingClientOrderMode={setQuickExistingClientOrderMode}
                 setQuickOrderType={setQuickOrderType}
                 setQuickDeviceType={setQuickDeviceType}
                 setQuickDevice={setQuickDevice}
@@ -12421,6 +12426,7 @@ useEffect(() => {
             quickClientName={quickClientName}
             quickClientEmail={quickClientEmail}
             quickClientTaxId={quickClientTaxId}
+            quickExistingClientOrderMode={quickExistingClientOrderMode}
             quickOrderType={quickOrderType}
             quickDeviceType={quickDeviceType}
             quickDevice={quickDevice}
@@ -12440,6 +12446,7 @@ useEffect(() => {
             setQuickClientName={setQuickClientName}
             setQuickClientEmail={setQuickClientEmail}
             setQuickClientTaxId={setQuickClientTaxId}
+            setQuickExistingClientOrderMode={setQuickExistingClientOrderMode}
             setQuickOrderType={setQuickOrderType}
             setQuickDeviceType={setQuickDeviceType}
             setQuickDevice={setQuickDevice}
@@ -12546,6 +12553,7 @@ useEffect(() => {
             quickClientName={quickClientName}
             quickClientEmail={quickClientEmail}
             quickClientTaxId={quickClientTaxId}
+            quickExistingClientOrderMode={quickExistingClientOrderMode}
             quickOrderType={quickOrderType}
             quickDeviceType={quickDeviceType}
             quickDevice={quickDevice}
@@ -12568,6 +12576,7 @@ useEffect(() => {
             setQuickClientName={setQuickClientName}
             setQuickClientEmail={setQuickClientEmail}
             setQuickClientTaxId={setQuickClientTaxId}
+            setQuickExistingClientOrderMode={setQuickExistingClientOrderMode}
             setQuickOrderType={setQuickOrderType}
             setQuickDeviceType={setQuickDeviceType}
             setQuickDevice={setQuickDevice}
@@ -12671,6 +12680,7 @@ useEffect(() => {
             quickClientName={quickClientName}
             quickClientEmail={quickClientEmail}
             quickClientTaxId={quickClientTaxId}
+            quickExistingClientOrderMode={quickExistingClientOrderMode}
             quickOrderType={quickOrderType}
             quickDeviceType={quickDeviceType}
             quickDevice={quickDevice}
@@ -12693,6 +12703,7 @@ useEffect(() => {
             setQuickClientName={setQuickClientName}
             setQuickClientEmail={setQuickClientEmail}
             setQuickClientTaxId={setQuickClientTaxId}
+            setQuickExistingClientOrderMode={setQuickExistingClientOrderMode}
             setQuickOrderType={setQuickOrderType}
             setQuickDeviceType={setQuickDeviceType}
             setQuickDevice={setQuickDevice}
@@ -13625,6 +13636,7 @@ function Dashboard({
   quickClientName: string;
   quickClientEmail: string;
   quickClientTaxId: string;
+  quickExistingClientOrderMode: boolean;
   quickOrderType: IntakeOrderType;
   quickDeviceType: IntakeDeviceType;
   quickDevice: string;
@@ -13644,6 +13656,7 @@ function Dashboard({
   setQuickClientName: (name: string) => void;
   setQuickClientEmail: (email: string) => void;
   setQuickClientTaxId: (taxId: string) => void;
+  setQuickExistingClientOrderMode: (enabled: boolean) => void;
   setQuickOrderType: (type: IntakeOrderType) => void;
   setQuickDeviceType: (type: IntakeDeviceType) => void;
   setQuickDevice: (device: string) => void;
@@ -15316,6 +15329,7 @@ function OrdersPage(props: {
   quickClientName: string;
   quickClientEmail: string;
   quickClientTaxId: string;
+  quickExistingClientOrderMode: boolean;
   quickOrderType: IntakeOrderType;
   quickDeviceType: IntakeDeviceType;
   quickDevice: string;
@@ -15337,6 +15351,7 @@ function OrdersPage(props: {
   setQuickClientName: (name: string) => void;
   setQuickClientEmail: (email: string) => void;
   setQuickClientTaxId: (taxId: string) => void;
+  setQuickExistingClientOrderMode: (enabled: boolean) => void;
   setQuickOrderType: (type: IntakeOrderType) => void;
   setQuickDeviceType: (type: IntakeDeviceType) => void;
   setQuickDevice: (device: string) => void;
@@ -15666,6 +15681,7 @@ function OrdersPage(props: {
       props.setQuickPhone('');
       props.setQuickClientEmail('');
       props.setQuickClientTaxId('');
+      props.setQuickExistingClientOrderMode(false);
       props.setQuickOrderType('ремонт');
       props.setQuickDeviceType('ноутбук');
       props.setQuickDevice('');
@@ -16466,6 +16482,7 @@ function OrdersPage(props: {
                         props.setQuickPhone(managerSearchMatchedClient.phone);
                         props.setQuickClientEmail(managerSearchMatchedClient.email ?? '');
                         props.setQuickClientTaxId(managerSearchMatchedClient.taxId ?? '');
+                        props.setQuickExistingClientOrderMode(true);
                       }}
                     >
                       Створити замовлення
@@ -16598,7 +16615,12 @@ function OrdersPage(props: {
                 ЄДРПОУ / ІПН
                 <input value={props.quickClientTaxId} onChange={(event) => props.setQuickClientTaxId(event.target.value)} placeholder="код клієнта" />
               </label>
-              {existingClientByPhone && (
+              {props.quickExistingClientOrderMode && (
+                <div className="manager-order-hints">
+                  <span className="manager-order-hint manager-order-hint-success">Замовлення для клієнта: {props.quickClientName || existingClientByPhone?.name || props.quickPhone}</span>
+                </div>
+              )}
+              {!props.quickExistingClientOrderMode && existingClientByPhone && (
                 <div className="manager-order-hints">
                   <span className="manager-order-hint manager-order-hint-warning">Клієнт з таким телефоном вже існує</span>
                   <button type="button" onClick={() => props.openClientRecord(existingClientByPhone.phone, existingClientByPhone.name)}>Відкрити клієнта</button>
@@ -16609,6 +16631,7 @@ function OrdersPage(props: {
                       props.setQuickPhone(existingClientByPhone.phone);
                       props.setQuickClientEmail(existingClientByPhone.email ?? '');
                       props.setQuickClientTaxId(existingClientByPhone.taxId ?? '');
+                      props.setQuickExistingClientOrderMode(true);
                     }}
                   >
                     Створити замовлення цьому клієнту
@@ -16684,7 +16707,7 @@ function OrdersPage(props: {
                 <textarea value={props.quickComment} onChange={(event) => props.setQuickComment(event.target.value)} rows={3} placeholder="Коментар менеджера" />
               </label>
             </div>
-            {props.quickClientDebtWarning && (
+            {!props.quickExistingClientOrderMode && props.quickClientDebtWarning && (
               <div className="manager-order-hints">
                 <span className="manager-order-hint manager-order-hint-danger">{props.quickClientDebtWarning}</span>
               </div>
