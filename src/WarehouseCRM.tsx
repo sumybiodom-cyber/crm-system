@@ -878,6 +878,13 @@ type SuggestedDocumentAction = {
   title: string;
   text: string;
   autoOpen?: boolean;
+  autoPrint?: boolean;
+};
+
+type SuggestedPrintAction = {
+  orderId: string;
+  kind: 'label' | 'intake_bundle';
+  autoPrint?: boolean;
 };
 
 type ServiceOrderPreviewKind = 'Квитанція прийому' | 'Рахунок на оплату' | 'Акт надання послуг' | 'Видаткова накладна' | 'Наряд на ремонт' | 'Гарантійний талон';
@@ -2218,6 +2225,7 @@ const MOVEMENTS_STORAGE_KEY = 'crm_movements';
 const ACTION_LOGS_STORAGE_KEY = 'crm_action_logs';
 const BACKUPS_STORAGE_KEY = 'crm_backups';
 const CASH_SHIFT_STORAGE_KEY = 'crm_cash_shift';
+const AUTO_PRINT_ON_ORDER_CREATE_KEY = 'crm_auto_print_on_order_create';
 const MAX_ACTION_LOGS = 100;
 const DEFAULT_WAREHOUSE_ID = 'WH-MAIN';
 
@@ -5285,6 +5293,8 @@ useEffect(() => {
   const [notice, setNotice] = useState('');
   const [toasts, setToasts] = useState<AppToast[]>([]);
   const [suggestedDocumentAction, setSuggestedDocumentAction] = useState<SuggestedDocumentAction | null>(null);
+  const [suggestedPrintAction, setSuggestedPrintAction] = useState<SuggestedPrintAction | null>(null);
+  const [autoPrintOnOrderCreate, setAutoPrintOnOrderCreate] = useState(() => localStorage.getItem(AUTO_PRINT_ON_ORDER_CREATE_KEY) !== 'false');
   const [dashboardFocus, setDashboardFocus] = useState<{ orderId: string; target: DashboardFocusTarget } | null>(null);
   const [loginPhone, setLoginPhone] = useState('');
   const [loginCode, setLoginCode] = useState('');
@@ -5638,6 +5648,10 @@ useEffect(() => {
     }, timeoutMs);
     return () => window.clearTimeout(timeout);
   }, [notice]);
+
+  useEffect(() => {
+    localStorage.setItem(AUTO_PRINT_ON_ORDER_CREATE_KEY, autoPrintOnOrderCreate ? 'true' : 'false');
+  }, [autoPrintOnOrderCreate]);
 
   async function handleClientsImport(file: File) {
     const rows = await readSpreadsheetRows(file);
@@ -6774,7 +6788,43 @@ useEffect(() => {
     setIsAssistantCollapsed(false);
     setGlobalAiCommand('');
 
-    const exactOrder = findExactOrderMatch(orders, input);
+    const orderFromCommand = findExactOrderMatch(orders, input);
+    const activeOrder = orderFromCommand ?? orders.find((order) => order.id === selectedOrderId);
+    const orderWorkspacePage: Page = viewUser.role === 'Менеджер' ? 'dashboard' : viewUser.role === 'Інженер' ? 'my-orders' : 'orders';
+    const wantsOrderDocument = hasAny(['наряд', 'квитанц', 'квитанцію', 'корінец', 'корінець', 'корешок', 'кореш', 'наклейк', 'label']);
+    const wantsLabel = hasAny(['наклейк', 'label']);
+    const wantsReceipt = hasAny(['квитанц', 'квитанцію', 'корінец', 'корінець', 'корешок', 'кореш']);
+    const wantsWorkOrder = hasAny(['наряд']);
+    const wantsPrint = hasAny(['надрукуй', 'напечатай', 'печать', 'друк']);
+    const wantsCreate = hasAny(['створи', 'створити', 'создай', 'создать']);
+    if (wantsOrderDocument && (wantsLabel || wantsReceipt || wantsWorkOrder)) {
+      if (!activeOrder) {
+        reply('AI Command Bar: потрібне замовлення', 'Оберіть замовлення або введіть номер замовлення, для якого потрібно показати наряд.', undefined, 'warning');
+        return;
+      }
+      if (!canOpen(orderWorkspacePage, 'У вас немає доступу до цієї дії.')) return;
+      openAssistantOrder(activeOrder.id);
+      if (wantsLabel) {
+        setSuggestedPrintAction({ orderId: activeOrder.id, kind: 'label', autoPrint: wantsPrint });
+        reply('AI Command Bar: наклейка', `Наклейка ${activeOrder.id} відкрита. Можна друкувати.`);
+        return;
+      }
+      const kind: ServiceOrderDocumentKind = wantsReceipt ? 'Квитанція прийому' : 'Наряд на ремонт';
+      const existingDocument = findServiceOrderDocument(activeOrder.id, kind);
+      if (!existingDocument || wantsCreate) ensureOrderDocumentRecord(kind, activeOrder);
+      setSuggestedDocumentAction({
+        orderId: activeOrder.id,
+        kind,
+        title: `AI Command Bar: ${kind}`,
+        text: existingDocument ? `${kind} уже існує. Відкриваю існуючий документ.` : `${kind} створено і відкрито.`,
+        autoOpen: true,
+        autoPrint: wantsPrint,
+      });
+      reply('AI Command Bar: документ відкрито', existingDocument ? `${kind} уже існує. Відкриваю існуючий документ.` : `${kind} ${activeOrder.id} відкрито. Можна друкувати.`);
+      return;
+    }
+
+    const exactOrder = orderFromCommand;
     if (exactOrder) {
       openAssistantOrder(exactOrder.id);
       reply('AI Command Bar: замовлення знайдено', `Відкрив ${exactOrder.id}. Перевірте картку та оберіть наступну дію.`);
@@ -6895,24 +6945,26 @@ useEffect(() => {
     const fallback = buildAssistantReply(input);
     if (fallback.actions?.[0]) fallback.actions[0].run();
     rememberCommandResult(fallback.text, fallback.steps, fallback.actions?.length ? 'success' : 'warning');
-    pushAssistantMessages([
-      {
-        id: uid('AI'),
-        author: 'user',
-        text: input,
-        context: assistantContextSummary,
-        createdAt: assistantTimestamp(),
-      },
-      {
-        id: uid('AI'),
-        author: 'assistant',
-        title: fallback.title,
-        text: fallback.text,
-        steps: fallback.steps,
-        context: fallback.context ?? assistantContextSummary,
-        createdAt: assistantTimestamp(),
-      },
-    ]);
+    if (fallback.actions?.length) {
+      pushAssistantMessages([
+        {
+          id: uid('AI'),
+          author: 'user',
+          text: input,
+          context: assistantContextSummary,
+          createdAt: assistantTimestamp(),
+        },
+        {
+          id: uid('AI'),
+          author: 'assistant',
+          title: fallback.title,
+          text: fallback.text,
+          steps: fallback.steps,
+          context: fallback.context ?? assistantContextSummary,
+          createdAt: assistantTimestamp(),
+        },
+      ]);
+    }
   }
 
   function openOrderFromNotification(message: InternalMessage) {
@@ -8124,9 +8176,21 @@ useEffect(() => {
       orderId,
       kind: 'Квитанція прийому',
       title: 'Прийом завершено',
-      text: 'Замовлення створено. Система одразу відкриває квитанцію з корешком і QR для друку.',
+      text: autoPrintOnOrderCreate
+        ? 'Замовлення створено. Відкриваю квитанцію, корешок і наклейку для друку.'
+        : 'Замовлення створено. Система одразу відкриває квитанцію з корешком і QR для друку.',
       autoOpen: true,
+      autoPrint: autoPrintOnOrderCreate,
     });
+    if (autoPrintOnOrderCreate) {
+      setSuggestedPrintAction({
+        orderId,
+        kind: 'intake_bundle',
+        autoPrint: true,
+      });
+    } else {
+      setSuggestedPrintAction(null);
+    }
     setQuickPhone('');
     setQuickClientDebtWarning('');
     setQuickClientName('');
@@ -12503,6 +12567,8 @@ useEffect(() => {
                 orderVersions={orderVersions}
                 suggestedDocumentAction={suggestedDocumentAction}
                 clearSuggestedDocumentAction={() => setSuggestedDocumentAction(null)}
+                suggestedPrintAction={suggestedPrintAction}
+                clearSuggestedPrintAction={() => setSuggestedPrintAction(null)}
                 dashboardFocus={dashboardFocus}
                 clearDashboardFocus={() => setDashboardFocus(null)}
                 notifyUser={setNotice}
@@ -12761,6 +12827,8 @@ useEffect(() => {
             orderVersions={orderVersions}
             suggestedDocumentAction={suggestedDocumentAction}
             clearSuggestedDocumentAction={() => setSuggestedDocumentAction(null)}
+            suggestedPrintAction={suggestedPrintAction}
+            clearSuggestedPrintAction={() => setSuggestedPrintAction(null)}
             dashboardFocus={dashboardFocus}
             clearDashboardFocus={() => setDashboardFocus(null)}
             notifyUser={setNotice}
@@ -12883,6 +12951,8 @@ useEffect(() => {
             orderVersions={orderVersions}
             suggestedDocumentAction={suggestedDocumentAction}
             clearSuggestedDocumentAction={() => setSuggestedDocumentAction(null)}
+            suggestedPrintAction={suggestedPrintAction}
+            clearSuggestedPrintAction={() => setSuggestedPrintAction(null)}
             dashboardFocus={dashboardFocus}
             clearDashboardFocus={() => setDashboardFocus(null)}
             notifyUser={setNotice}
@@ -12992,8 +13062,10 @@ useEffect(() => {
             restoreBackup={restoreBackupSnapshot}
             exportBackup={exportBackupSnapshot}
             exportCurrentLiveData={exportCurrentLiveData}
-            importBackupFile={importBackupFile}
-          />
+          importBackupFile={importBackupFile}
+          autoPrintOnOrderCreate={autoPrintOnOrderCreate}
+          setAutoPrintOnOrderCreate={setAutoPrintOnOrderCreate}
+        />
         )}
             <footer style={{ marginTop: '24px', padding: '16px 0 8px', color: '#64748b', fontSize: '14px' }}>
               Контакт: {companySettings.mainEmail}
@@ -15532,6 +15604,8 @@ function OrdersPage(props: {
   orderVersions: OrderVersion[];
   suggestedDocumentAction: SuggestedDocumentAction | null;
   clearSuggestedDocumentAction: () => void;
+  suggestedPrintAction: SuggestedPrintAction | null;
+  clearSuggestedPrintAction: () => void;
   dashboardFocus: { orderId: string; target: DashboardFocusTarget } | null;
   clearDashboardFocus: () => void;
   notifyUser: (message: string) => void;
@@ -17758,7 +17832,7 @@ function MyOrdersPage({ orders, activeUser, acceptOrderWork, changeOrderStatus, 
   );
 }
 
-function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations, orderMovementLogs, moveOrder, products, selectedProductId, setSelectedProductId, qty, setQty, addPartToRepair, orderPart, reserveArrived, issueToEngineer, markInstalled, returnServicePart, addOrderPayment, changeOrderStatus, acceptOrderWork, returnOrderToCellReady, reassignEngineer, closeOrder, issueReadyOrder, oneClickManagerIssue, transferOrderToBas, printDocument, createServiceOrderDocument, printServiceOrderDocument, documents, taxInvoices, notifications, allNotifications, sendClientNotification, createNotificationDraft, approval, sendRepairApproval, recordApprovalResponse, markApprovalNoAnswer, logRiskConfirmation, ensureOrderDocumentRecord, logOrderDocumentPrint, signOrderAct, createTaxInvoiceForOrder, registerTaxInvoice, markEngineerWorkCompleted, cancelOrder, refundOrder, cancelOrderAct, reopenOrder, orderVersions, suggestedDocumentAction, clearSuggestedDocumentAction, dashboardFocus, clearDashboardFocus, notifyUser, canDo, showCost, activeUser, users }: {
+function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations, orderMovementLogs, moveOrder, products, selectedProductId, setSelectedProductId, qty, setQty, addPartToRepair, orderPart, reserveArrived, issueToEngineer, markInstalled, returnServicePart, addOrderPayment, changeOrderStatus, acceptOrderWork, returnOrderToCellReady, reassignEngineer, closeOrder, issueReadyOrder, oneClickManagerIssue, transferOrderToBas, printDocument, createServiceOrderDocument, printServiceOrderDocument, documents, taxInvoices, notifications, allNotifications, sendClientNotification, createNotificationDraft, approval, sendRepairApproval, recordApprovalResponse, markApprovalNoAnswer, logRiskConfirmation, ensureOrderDocumentRecord, logOrderDocumentPrint, signOrderAct, createTaxInvoiceForOrder, registerTaxInvoice, markEngineerWorkCompleted, cancelOrder, refundOrder, cancelOrderAct, reopenOrder, orderVersions, suggestedDocumentAction, clearSuggestedDocumentAction, suggestedPrintAction, clearSuggestedPrintAction, dashboardFocus, clearDashboardFocus, notifyUser, canDo, showCost, activeUser, users }: {
   selectedOrder: ServiceOrder;
   allOrders: ServiceOrder[];
   orderUnits: OrderUnit[];
@@ -17812,6 +17886,8 @@ function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations,
   orderVersions: OrderVersion[];
   suggestedDocumentAction: SuggestedDocumentAction | null;
   clearSuggestedDocumentAction: () => void;
+  suggestedPrintAction: SuggestedPrintAction | null;
+  clearSuggestedPrintAction: () => void;
   dashboardFocus: { orderId: string; target: DashboardFocusTarget } | null;
   clearDashboardFocus: () => void;
   notifyUser: (message: string) => void;
@@ -17856,6 +17932,7 @@ function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations,
   const [extraWorkComment, setExtraWorkComment] = useState('');
   const [isDocumentPreviewOpen, setIsDocumentPreviewOpen] = useState(false);
   const [isLabelPreviewOpen, setIsLabelPreviewOpen] = useState(false);
+  const [isPrintBundlePromptVisible, setIsPrintBundlePromptVisible] = useState(false);
   const [pendingLocationCode, setPendingLocationCode] = useState(selectedOrder.locationCode ?? '');
   const [selectedDocumentKind, setSelectedDocumentKind] = useState<ServiceOrderPreviewKind>('Квитанція прийому');
   const [documentPreviewNonce, setDocumentPreviewNonce] = useState(0);
@@ -17899,6 +17976,7 @@ function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations,
   const canPreviewWorkOrder = canPreviewOrderDocuments;
   const canPreviewWarranty = canPreviewOrderDocuments && ['Видано', 'Закрито'].includes(selectedOrder.status);
   const activeDocumentSuggestion = suggestedDocumentAction?.orderId === selectedOrder.id ? suggestedDocumentAction : null;
+  const activePrintSuggestion = suggestedPrintAction?.orderId === selectedOrder.id ? suggestedPrintAction : null;
   const activeDashboardFocus = dashboardFocus?.orderId === selectedOrder.id ? dashboardFocus : null;
   const displayedOrderAmount = totals.total > 0 ? money(totals.total) : selectedOrder.estimatedAmount ? `${money(selectedOrder.estimatedAmount)} · орієнтовно` : 'Не визначено';
   const orderCreatorName = getOrderCreatorName(selectedOrder, users);
@@ -18321,6 +18399,12 @@ function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations,
     frameWindow.focus();
     frameWindow.print();
   };
+  const printIntakeBundle = () => {
+    if (!isDocumentPreviewOpen) setIsDocumentPreviewOpen(true);
+    printPreviewDocument();
+    if (isLabelPreviewOpen) printLabelPreview();
+    setIsPrintBundlePromptVisible(false);
+  };
   const validateDocumentPreview = (kind: ServiceOrderPreviewKind) => {
     if (kind === 'Квитанція прийому' || kind === 'Наряд на ремонт') return '';
     if (['Рахунок на оплату', 'Акт надання послуг', 'Видаткова накладна'].includes(kind) && !hasDocument(kind as DocumentKind)) return `Спочатку створіть документ "${kind}".`;
@@ -18373,7 +18457,9 @@ function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations,
             <div class="row"><div class="label-title">Дата прийому</div><div class="value">${escapeHtml(extractDayKey(selectedOrder.intakeDate))}</div></div>
             <div class="row"><div class="label-title">Вік замовлення</div><div class="value">${escapeHtml(String(orderAgeDays))} дн.</div></div>
             <div class="row"><div class="label-title">Клієнт</div><div class="value">${escapeHtml(selectedOrder.client)}</div></div>
-            <div class="row"><div class="label-title">Пристрій</div><div class="value">${escapeHtml(shortDevice)}</div></div>
+            <div class="row"><div class="label-title">Тип пристрою</div><div class="value">${escapeHtml(selectedOrder.deviceType ?? selectedOrder.orderType ?? 'пристрій')}</div></div>
+            <div class="row"><div class="label-title">Модель</div><div class="value">${escapeHtml(selectedOrder.brandModel ?? shortDevice)}</div></div>
+            <div class="row"><div class="label-title">Storage code</div><div class="value">${escapeHtml(selectedOrder.locationCode ?? 'БЕЗ ЯЧЕЙКИ')}</div></div>
           </div>
         </body>
       </html>
@@ -18448,8 +18534,25 @@ function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations,
     setSelectedDocumentKind(activeDocumentSuggestion.kind);
     setDocumentPreviewNonce((value) => value + 1);
     setIsDocumentPreviewOpen(true);
+    setIsPrintBundlePromptVisible(Boolean(activeDocumentSuggestion.autoPrint));
     clearSuggestedDocumentAction();
   }, [activeDocumentSuggestion, canPreviewOrderDocuments, clearSuggestedDocumentAction, notifyUser, selectedOrder.id]);
+  useEffect(() => {
+    if (!activePrintSuggestion) return;
+    if (activePrintSuggestion.kind === 'label') {
+      setIsLabelPreviewOpen(true);
+      notifyUser(`Наклейка ${selectedOrder.id} відкрита. Можна друкувати.`);
+      clearSuggestedPrintAction();
+      return;
+    }
+    setSelectedDocumentKind('Квитанція прийому');
+    setDocumentPreviewNonce((value) => value + 1);
+    setIsDocumentPreviewOpen(true);
+    setIsLabelPreviewOpen(true);
+    setIsPrintBundlePromptVisible(Boolean(activePrintSuggestion.autoPrint));
+    notifyUser(activePrintSuggestion.autoPrint ? `Відкрито квитанцію, корешок і наклейку ${selectedOrder.id}. Натисніть друк.` : `Відкрито квитанцію і наклейку ${selectedOrder.id}.`);
+    clearSuggestedPrintAction();
+  }, [activePrintSuggestion, clearSuggestedPrintAction, notifyUser, selectedOrder.id]);
   useEffect(() => {
     if (!activeDashboardFocus || !canShowManagerView) return;
     if (activeDashboardFocus.target === 'payment') {
@@ -18617,9 +18720,10 @@ function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations,
               <div className="simple-action-panel">
                 <button type="button" onClick={managerAcceptIntoWork} disabled={!managerCanAcceptIntoWork}>Передати інженеру</button>
                 <button type="button" onClick={() => sendRepairApproval(selectedOrder, 'Telegram')} disabled={statusActionCriticalMessages.length > 0}>Відправити на погодження</button>
-                <button type="button" onClick={() => openLabelPreview()}>Печать наклейки</button>
-                <button type="button" onClick={() => openDocumentPreview('Квитанція прийому')}>Печать квитанції</button>
-                <button type="button" onClick={() => openDocumentPreview('Наряд на ремонт')} disabled={!canPreviewWorkOrder}>Печать наряда</button>
+                <button type="button" onClick={() => openLabelPreview()}>Друк наклейки</button>
+                <button type="button" onClick={() => openDocumentPreview('Квитанція прийому')}>Друк квитанції</button>
+                <button type="button" onClick={() => openDocumentPreview('Наряд на ремонт')} disabled={!canPreviewWorkOrder}>Друк наряда</button>
+                <button type="button" onClick={() => openDocumentPreview('Квитанція прийому')}>PDF / перегляд</button>
                 <button type="button" onClick={() => canPreviewAct ? openDocumentPreview('Акт надання послуг') : canPreviewInvoice ? openDocumentPreview('Рахунок на оплату') : openDocumentPreview('Квитанція прийому')}>Відкрити документи</button>
                 <button type="button" onClick={managerMarkReadyForIssue} disabled={!managerCanMarkReadyForIssue}>Підготувати до видачі</button>
                 <button type="button" onClick={() => setIsMiniCashOpen(true)} disabled={!managerCanTakePayment}>Прийняти оплату</button>
@@ -19129,9 +19233,12 @@ function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations,
               <Info label="Дата прийому" value={extractDayKey(selectedOrder.intakeDate)} />
               <Info label="Вік замовлення" value={`${totalAge} дн.`} />
               <Info label="Клієнт" value={selectedOrder.client} />
-              <Info label="Пристрій" value={selectedOrder.device} />
+              <Info label="Тип пристрою" value={selectedOrder.deviceType ?? selectedOrder.orderType ?? 'пристрій'} />
+              <Info label="Модель" value={selectedOrder.brandModel ?? selectedOrder.device} />
+              <Info label="Storage code" value={selectedOrder.locationCode ?? 'БЕЗ ЯЧЕЙКИ'} />
             </div>
             <div className="action-row" style={{ justifyContent: 'flex-end', marginTop: '16px' }}>
+              {isPrintBundlePromptVisible && <button type="button" className="submit-button" onClick={printIntakeBundle}>Надрукувати зараз</button>}
               <button type="button" onClick={printLabelPreview}>Печать</button>
               <button type="button" onClick={() => setIsLabelPreviewOpen(false)}>Закрыть</button>
             </div>
@@ -19160,6 +19267,8 @@ function OrderDetail({ selectedOrder, allOrders, orderUnits, warehouseLocations,
               />
             </div>
             <div className="action-row" style={{ padding: '12px 18px 16px', borderTop: '1px solid #d8cebf', backgroundColor: '#efe9de', justifyContent: 'flex-end' }}>
+              {isPrintBundlePromptVisible && <button type="button" className="submit-button" onClick={printIntakeBundle}>Надрукувати зараз</button>}
+              <button type="button" onClick={() => notifyUser('У діалозі друку оберіть "Зберегти як PDF".')}>PDF / перегляд</button>
               <button type="button" onClick={printPreviewDocument}>Печать</button>
               <button type="button" onClick={() => setIsDocumentPreviewOpen(false)}>Закрыть</button>
             </div>
@@ -24055,6 +24164,8 @@ function SettingsPage({
   exportBackup,
   exportCurrentLiveData,
   importBackupFile,
+  autoPrintOnOrderCreate,
+  setAutoPrintOnOrderCreate,
 }: {
   actionLogs: ActionLog[];
   activeUser: User;
@@ -24064,6 +24175,8 @@ function SettingsPage({
   exportBackup: (snapshotId: string) => void;
   exportCurrentLiveData: () => void;
   importBackupFile: (file: File) => Promise<void>;
+  autoPrintOnOrderCreate: boolean;
+  setAutoPrintOnOrderCreate: (value: boolean) => void;
 }) {
   const backupInputRef = useRef<HTMLInputElement | null>(null);
   return (
@@ -24073,6 +24186,7 @@ function SettingsPage({
         <div className="panel"><h2>Компанія</h2><dl className="details"><div><dt>Назва</dt><dd>{companySettings.companyName}</dd></div><div><dt>Основний email</dt><dd>{companySettings.mainEmail}</dd></div><div><dt>ЄДРПОУ</dt><dd>{companySettings.edrpou}</dd></div><div><dt>ІПН</dt><dd>{companySettings.ipn}</dd></div><div><dt>IBAN</dt><dd>{companySettings.iban}</dd></div><div><dt>Банк</dt><dd>{companySettings.bank}</dd></div><div><dt>МФО</dt><dd>{companySettings.mfo}</dd></div><div><dt>Адреса</dt><dd>{companySettings.address}</dd></div><div><dt>Телефон</dt><dd>{companySettings.phone}</dd></div><div><dt>ПДВ</dt><dd>{companySettings.vatEnabled ? 'Увімкнено' : 'Вимкнено'}</dd></div><div><dt>Свідоцтво ПДВ</dt><dd>{companySettings.vatCertificate}</dd></div><div><dt>Валюта</dt><dd>Українська гривня</dd></div></dl></div>
         <div className="panel"><h2>Обов'язкові документи</h2><div className="task-list"><Task icon={<PackagePlus />} title="Потреба" text="Створюється, якщо запчастини немає на складі." /><Task icon={<ShoppingCart />} title="Закупівля" text="Пов'язується з ремонтом і потребою." /><Task icon={<History />} title="Рух складу" text="Фіксує кожну зміну залишків." /></div></div>
         <div className="panel"><h2>Анти-1С інтерфейс</h2><div className="task-list"><Task icon={<CheckCircle2 />} title="1-3 кліки" text="Головні дії винесені великими кнопками: прийняти оплату, видати, взяти в роботу, друк квитанції." /><Task icon={<LayoutDashboard />} title="Плоске меню" text="Меню веде одразу на сторінку, без підменю і підподменю." /><Task icon={<Plus />} title="Складне сховано" text="Рідкі дії відкриваються через кнопку Показати ще." /></div></div>
+        <div className="panel"><h2>Автопечать прийому</h2><div className="task-list"><label style={{ display: 'flex', gap: '10px', alignItems: 'center' }}><input type="checkbox" checked={autoPrintOnOrderCreate} onChange={(event) => setAutoPrintOnOrderCreate(event.target.checked)} /><span>autoPrintOnOrderCreate</span></label><Task icon={<ClipboardList />} title={autoPrintOnOrderCreate ? 'Увімкнено' : 'Вимкнено'} text="Після створення замовлення CRM відкриває квитанцію з корешком і наклейку. Якщо браузер блокує автодрук, зʼявляється кнопка друку." /></div></div>
         <div className="panel"><h2>Уведомлення клієнтам</h2><div className="task-list">{clientNotificationTemplates.slice(0, 4).map((template) => <Task key={`${template.event}-${template.channel}`} icon={<Bell />} title={`${template.event} · ${template.channel}`} text={`${template.enabled ? 'Увімкнено' : 'Вимкнено'}: ${template.text}`} />)}</div></div>
       </section>
       <section className="panel">
