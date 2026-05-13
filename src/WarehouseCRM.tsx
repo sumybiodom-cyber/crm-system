@@ -6,6 +6,7 @@ import { OrderStatus } from './types';
 import invoiceTemplateHtml from './templates/invoiceTemplate.html?raw';
 import actTemplateHtml from './templates/actTemplate.html?raw';
 import waybillTemplateHtml from './templates/waybillTemplate.html?raw';
+import { cloudSyncConfig, fetchCloudEntity, pushCloudEntity, stableCloudId } from './cloudSync';
 import { 
   Archive,
   ArrowRight,
@@ -2211,6 +2212,7 @@ const SUPPLIERS_STORAGE_KEY = 'crm_suppliers';
 const WAREHOUSES_STORAGE_KEY = 'crm_warehouses';
 const PRODUCTS_STORAGE_KEY = 'crm_products';
 const ORDERS_STORAGE_KEY = 'crm_orders';
+const DOCUMENTS_STORAGE_KEY = 'crm_documents';
 const PAYMENTS_STORAGE_KEY = 'crm_payments';
 const ENGINEER_PAYMENTS_STORAGE_KEY = 'crm_engineer_payments';
 const FINANCE_EXPENSES_STORAGE_KEY = 'crm_finance_expenses';
@@ -2404,6 +2406,21 @@ function loadOrdersFromStorage(): ServiceOrder[] {
 
 function saveOrdersToStorage(orders: ServiceOrder[]) {
   localStorage.setItem(ORDERS_STORAGE_KEY, JSON.stringify(orders));
+}
+
+function loadDocumentsFromStorage(): PrintDocument[] {
+  try {
+    const raw = localStorage.getItem(DOCUMENTS_STORAGE_KEY);
+    if (!raw) return initialDocuments;
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? mergeSeededById(parsed as PrintDocument[], initialDocuments) : initialDocuments;
+  } catch {
+    return initialDocuments;
+  }
+}
+
+function saveDocumentsToStorage(documents: PrintDocument[]) {
+  localStorage.setItem(DOCUMENTS_STORAGE_KEY, JSON.stringify(documents));
 }
 
 function parseTaxInvoiceSnapshot(snapshot?: string) {
@@ -4650,6 +4667,17 @@ function defaultPermissionsForRole(role: Role): UserPermissions {
   return { canAccessWarehouse: false, canAccessFinance: false, canAccessDocuments: false, canAccessEmployees: false, canAccessSettings: false, canAccessReports: false };
 }
 
+function clientSyncId(client: ClientRecord) {
+  return stableCloudId(extractDigits(client.phone) || normalizeTaxId(client.taxId) || client.name);
+}
+
+function mergeByStableId<T>(localItems: T[], remoteItems: T[], getId: (item: T) => string) {
+  const map = new Map<string, T>();
+  localItems.forEach((item) => map.set(getId(item), item));
+  remoteItems.forEach((item) => map.set(getId(item), item));
+  return Array.from(map.values());
+}
+
 function normalizeUserRecord(user: User): User {
   const normalizedRole: Role = normalizeRoleAlias(user.role);
   const defaultPermissions = defaultPermissionsForRole(normalizedRole);
@@ -5245,7 +5273,7 @@ useEffect(() => {
   const [bankImportItems, setBankImportItems] = useState<BankImportItem[]>(() => loadBankImportItemsFromStorage());
   const [bankImportDraft, setBankImportDraft] = useState<BankImportDraft | null>(null);
   const [sales, setSales] = useState<Sale[]>(initialSales);
-  const [documents, setDocuments] = useState<PrintDocument[]>(initialDocuments);
+  const [documents, setDocuments] = useState<PrintDocument[]>(() => loadDocumentsFromStorage());
   const [taxInvoices, setTaxInvoices] = useState<TaxInvoice[]>(() => loadTaxInvoicesFromStorage());
   const [simplePayments, setSimplePayments] = useState<SimpleOrderPaymentRecord[]>(() => loadSimplePaymentsFromStorage());
   const [engineerPayments, setEngineerPayments] = useState<EngineerPayment[]>(() => loadEngineerPaymentsFromStorage());
@@ -5322,6 +5350,13 @@ useEffect(() => {
   const assistantLogRef = useRef<HTMLDivElement | null>(null);
   const assistantEndRef = useRef<HTMLDivElement | null>(null);
   const assistantResizeStartWidthRef = useRef(460);
+  const cloudSync = cloudSyncConfig();
+  const cloudHydratedRef = useRef(false);
+  const cloudApplyingRef = useRef(false);
+  const cloudUsersRef = useRef(users);
+  const cloudClientsRef = useRef(customerList);
+  const cloudOrdersRef = useRef(orders);
+  const cloudDocumentsRef = useRef(documents);
 
   const sessionUserRecord = users.find((user) => user.id === sessionUserId) ?? null;
   const activeUserRecord = users.find((user) => user.id === activeUserId) ?? sessionUserRecord;
@@ -5551,6 +5586,10 @@ useEffect(() => {
   }, [orders]);
 
   useEffect(() => {
+    saveDocumentsToStorage(documents);
+  }, [documents]);
+
+  useEffect(() => {
     saveSimplePaymentsToStorage(simplePayments);
   }, [simplePayments]);
   useEffect(() => {
@@ -5603,6 +5642,90 @@ useEffect(() => {
   useEffect(() => {
     saveBackupsToStorage(backups);
   }, [backups]);
+
+  useEffect(() => {
+    cloudUsersRef.current = users;
+  }, [users]);
+
+  useEffect(() => {
+    cloudClientsRef.current = customerList;
+  }, [customerList]);
+
+  useEffect(() => {
+    cloudOrdersRef.current = orders;
+  }, [orders]);
+
+  useEffect(() => {
+    cloudDocumentsRef.current = documents;
+  }, [documents]);
+
+  useEffect(() => {
+    if (!cloudSync.enabled) return;
+    let cancelled = false;
+    async function pullCloudState(mode: 'initial' | 'poll') {
+      try {
+        const [cloudUsers, cloudClients, cloudOrders, cloudDocuments] = await Promise.all([
+          fetchCloudEntity<User>('users'),
+          fetchCloudEntity<ClientRecord>('clients'),
+          fetchCloudEntity<ServiceOrder>('orders'),
+          fetchCloudEntity<PrintDocument>('documents'),
+        ]);
+        if (cancelled) return;
+        cloudApplyingRef.current = true;
+        if (cloudUsers.length > 0) setUsers((current) => mergeTestAuthUsers(mergeByStableId(current, cloudUsers, (user) => user.id)));
+        if (cloudClients.length > 0) setCustomerList((current) => mergeByStableId(current, cloudClients, clientSyncId));
+        if (cloudOrders.length > 0) setOrders((current) => mergeByStableId(current, cloudOrders, (order) => order.id));
+        if (cloudDocuments.length > 0) setDocuments((current) => mergeByStableId(current, cloudDocuments, (document) => document.id));
+        window.setTimeout(() => {
+          cloudApplyingRef.current = false;
+        }, 0);
+        if (mode === 'initial') {
+          cloudHydratedRef.current = true;
+          setNotice('Cloud sync підключено: users, clients, orders, documents.');
+          if (cloudUsers.length === 0 && cloudClients.length === 0 && cloudOrders.length === 0 && cloudDocuments.length === 0) {
+            void Promise.all([
+              pushCloudEntity('users', cloudUsersRef.current, (user) => user.id),
+              pushCloudEntity('clients', cloudClientsRef.current, clientSyncId),
+              pushCloudEntity('orders', cloudOrdersRef.current, (order) => order.id),
+              pushCloudEntity('documents', cloudDocumentsRef.current, (document) => document.id),
+            ]).catch((error) => setNotice(error instanceof Error ? error.message : 'Cloud sync initial seed failed.'));
+          }
+        }
+      } catch (error) {
+        cloudApplyingRef.current = false;
+        if (mode === 'initial') cloudHydratedRef.current = true;
+        setNotice(error instanceof Error ? error.message : 'Cloud sync недоступний. CRM працює локально.');
+      }
+    }
+    void pullCloudState('initial');
+    const timer = window.setInterval(() => {
+      void pullCloudState('poll');
+    }, cloudSync.intervalMs);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [cloudSync.enabled, cloudSync.intervalMs]);
+
+  useEffect(() => {
+    if (!cloudSync.enabled || !cloudHydratedRef.current || cloudApplyingRef.current) return;
+    void pushCloudEntity('users', users, (user) => user.id).catch((error) => setNotice(error instanceof Error ? error.message : 'Cloud sync users failed.'));
+  }, [cloudSync.enabled, users]);
+
+  useEffect(() => {
+    if (!cloudSync.enabled || !cloudHydratedRef.current || cloudApplyingRef.current) return;
+    void pushCloudEntity('clients', customerList, clientSyncId).catch((error) => setNotice(error instanceof Error ? error.message : 'Cloud sync clients failed.'));
+  }, [cloudSync.enabled, customerList]);
+
+  useEffect(() => {
+    if (!cloudSync.enabled || !cloudHydratedRef.current || cloudApplyingRef.current) return;
+    void pushCloudEntity('orders', orders, (order) => order.id).catch((error) => setNotice(error instanceof Error ? error.message : 'Cloud sync orders failed.'));
+  }, [cloudSync.enabled, orders]);
+
+  useEffect(() => {
+    if (!cloudSync.enabled || !cloudHydratedRef.current || cloudApplyingRef.current) return;
+    void pushCloudEntity('documents', documents, (document) => document.id).catch((error) => setNotice(error instanceof Error ? error.message : 'Cloud sync documents failed.'));
+  }, [cloudSync.enabled, documents]);
 
   useEffect(() => {
     const autoBackupIntervalMs = 12 * 60 * 60 * 1000;
@@ -24179,6 +24302,7 @@ function SettingsPage({
   setAutoPrintOnOrderCreate: (value: boolean) => void;
 }) {
   const backupInputRef = useRef<HTMLInputElement | null>(null);
+  const cloudSync = cloudSyncConfig();
   return (
     <div className="page-grid">
       <PageTitle eyebrow="Налаштування" title="Правила обліку СПЕКТР-АС" text="Система забороняє резерв без залишку, списання без документа і пряме ручне редагування складу." />
@@ -24187,6 +24311,7 @@ function SettingsPage({
         <div className="panel"><h2>Обов'язкові документи</h2><div className="task-list"><Task icon={<PackagePlus />} title="Потреба" text="Створюється, якщо запчастини немає на складі." /><Task icon={<ShoppingCart />} title="Закупівля" text="Пов'язується з ремонтом і потребою." /><Task icon={<History />} title="Рух складу" text="Фіксує кожну зміну залишків." /></div></div>
         <div className="panel"><h2>Анти-1С інтерфейс</h2><div className="task-list"><Task icon={<CheckCircle2 />} title="1-3 кліки" text="Головні дії винесені великими кнопками: прийняти оплату, видати, взяти в роботу, друк квитанції." /><Task icon={<LayoutDashboard />} title="Плоске меню" text="Меню веде одразу на сторінку, без підменю і підподменю." /><Task icon={<Plus />} title="Складне сховано" text="Рідкі дії відкриваються через кнопку Показати ще." /></div></div>
         <div className="panel"><h2>Автопечать прийому</h2><div className="task-list"><label style={{ display: 'flex', gap: '10px', alignItems: 'center' }}><input type="checkbox" checked={autoPrintOnOrderCreate} onChange={(event) => setAutoPrintOnOrderCreate(event.target.checked)} /><span>autoPrintOnOrderCreate</span></label><Task icon={<ClipboardList />} title={autoPrintOnOrderCreate ? 'Увімкнено' : 'Вимкнено'} text="Після створення замовлення CRM відкриває квитанцію з корешком і наклейку. Якщо браузер блокує автодрук, зʼявляється кнопка друку." /></div></div>
+        <div className="panel"><h2>Cloud database</h2><div className="task-list"><Task icon={<Archive />} title={cloudSync.enabled ? 'Supabase sync увімкнено' : 'Працює localStorage'} text={cloudSync.enabled ? `Синхронізуються users, clients, orders, documents кожні ${Math.round(cloudSync.intervalMs / 1000)} сек.` : 'Щоб увімкнути спільну базу, додайте VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY і VITE_CRM_CLOUD_SYNC=true.'} /><Task icon={<ShieldCheck />} title="Перший етап" text="Cloud bridge не змінює UI, документи, QR, друк і AI workflow. LocalStorage залишається fallback." /></div></div>
         <div className="panel"><h2>Уведомлення клієнтам</h2><div className="task-list">{clientNotificationTemplates.slice(0, 4).map((template) => <Task key={`${template.event}-${template.channel}`} icon={<Bell />} title={`${template.event} · ${template.channel}`} text={`${template.enabled ? 'Увімкнено' : 'Вимкнено'}: ${template.text}`} />)}</div></div>
       </section>
       <section className="panel">
